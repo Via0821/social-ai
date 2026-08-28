@@ -1,0 +1,71 @@
+# ============================================================
+# SOCIAL — .gitignore
+# Secrets and runtime state must NEVER be committed.
+# ============================================================
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.p12
+*credentials*.json
+*secret*.json
+*token*.json
+*client_secret*.json
+auth.json
+service-account*.json
+
+# --- Hermes runtime state (project-local HERMES_HOME) ---
+.hermes/
+!.hermes/.gitkeep
+
+# --- Logs / pids ---
+*.log
+*.pid
+logs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node ---
+node_modules/
+
+# --- Temp ---
+tmp/
+.temp/
+*.swp
+*~
+.DS_Store
+
+# --- Backups (may contain secrets) ---
+backups/
+*.zip
+*.tar.gz
+
+# --- Auto-downloaded runtime binaries ---
+# Hermes' transcription tool fetches a static ffmpeg on first use.
+# Large, platform-specific, and reproducible — never commit.
+tools/ffmpeg*
+tools/
+
+# --- Owner UI ---
+ui/node_modules/
+ui/dist/
+.hermes/briefs/
+*.tsbuildinfo
+
+# --- Google OAuth client (any download naming) ---
+*apps.googleusercontent.com.json
+*oauth*.json
+client_secret*.json
+JSON-*.json

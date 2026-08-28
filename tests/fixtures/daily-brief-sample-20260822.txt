@@ -1,0 +1,49 @@
+2026-08-22
+
+1. 株価・市場
+・S&P 500 (^GSPC): 7,674.37（+0.43%）
+・NASDAQ (^IXIC): 26,180.46（+0.43%）
+・日経平均 (^N225): 66,016.36（-0.30%）
+・注目銘柄（こちらで選定）: NVDA 214.72（-0.98%）、AAPL 309.35（-0.63%）、MSFT 483.24（+0.43%）
+・解釈: 米株指数は小幅高でリスクオン寄りだが、個別はまちまち。日本株は小幅調整。
+
+2. 重要ニュース
+・APの「Top Stories Aug 22」より: イスラエル国防相がハマスに警告、米カリフォルニアで選挙区割り関連の投票、ハリケーンErinが北上（事実）
+・上記以外は、主要ニュースの確度高い追加項目をこのターンで十分に裏取りできませんでした。
+
+3. AI関連最新情報
+・EU AI Act: 2026-08-02からAI Officeと各国当局の「執行権限」が適用開始（GPAIモデル等が主対象）（事実）
+・OpenAI: サイバー防衛向け「Daybreak」パートナープログラム（ガバナンス付き連携/運用）を案内（事実）
+・解釈: 規制（EU）と高リスク領域でのアクセス統制（サイバー）が、AI活用の前提条件として強まっている。
+
+4. ビジネストレンド
+・米フィラデルフィア連銀 SPF（Q3 2026, 2026-08-14）: 直近の成長率見通しを上方修正（2026Q3 2.5%、Q4 2.3%）し、失業率見通しは4.2〜4.3%レンジ（事実）
+・同SPF: 2026Q3のCPI（年率）見通しは2.3%（前回3.0%から低下）（事実）
+・解釈: 「景気は底堅いが過熱ではない」前提が強く、投資・採用ともに“急ブレーキ回避”シナリオが中心になりやすい。
+
+5. 求人・採用市場
+・米BLS JOLTS（2026-08-04, 2026年6月）: 求人件数 7.4m、採用 5.3m、離職合計 5.4m（うち自主退職 3.2m、レイオフ等 1.8m）と「大きな変化なし」（事実）
+・Indeed Hiring Lab（2026-08-05）: 「緩やかな冷却」予想。JPIは2027年6月まで平均-1.4%見込み、失業率は年末に約4.4%へ（事実）
+・解釈: “low-hire/low-fire”寄りの停滞感が続き、職種・地域で濃淡が出やすい。
+
+6. 求人媒体・採用手法の変化
+・NYC DCWP（Local Law 144）: AEDT（自動化された採用意思決定ツール）利用に、1年以内のバイアス監査・公開・通知を要求（事実）
+・NY州監査報告（OSC, 2025-12-02）: DCWPのLL144の運用は「苦情ベースで可視性が低い」等、執行体制の有効性を監査（事実）
+・本日は取得できませんでした: EEOCのAI/アルゴリズム選考に関する該当ページ（アクセスしたURLが404）
+
+今日特に重要な3点
+・米主要株価指数は小幅高（S&P 500 +0.43%、NASDAQ +0.43%）で地合いは悪くない一方、注目大型株は濃淡（事実＋解釈）
+・EU AI Actの執行権限が2026-08-02から適用開始（GPAI等）。AI活用の“規制対応”が一段具体化（事実）
+・米雇用は「求人・採用・離職が大きく変化なし」（JOLTS）。冷えすぎでも過熱でもない局面が示唆（事実＋解釈）
+
+Sources
+・Yahoo Finance（stocksスキルで取得, 2026-08-22）: https://finance.yahoo.com/quote/%5EGSPC/ / https://finance.yahoo.com/quote/%5EIXIC/ / https://finance.yahoo.com/quote/%5EN225/ / https://finance.yahoo.com/quote/NVDA/ / https://finance.yahoo.com/quote/AAPL/ / https://finance.yahoo.com/quote/MSFT/
+・AP Top Stories Aug 22（取得: 2026-08-22）: https://apnews.com/video/ap-top-stories-august-22-0ebd209583f74005bfac13056ec03672
+・BLS JOLTS News Release (JUNE 2026)（取得: 2026-08-22）: https://www.bls.gov/news.release/archives/jolts_08042026.htm
+・Indeed Hiring Lab（取得: 2026-08-22）: https://hiringlab.indeed.com/2026/08/05/q2-labor-market-outlook-survey/
+・European Commission（AI Act enforcement framework）（取得: 2026-08-22）: https://digital-strategy.ec.europa.eu/en/policies/enforcement-ai-act
+・Philadelphia Fed SPF Q3 2026（取得: 2026-08-22）: https://www.philadelphiafed.org/surveys-and-data/real-time-data-research/spf-q3-2026
+・NYC DCWP AEDT / Local Law 144（取得: 2026-08-22）: https://www.nyc.gov/site/dca/about/automated-employment-decision-tools.page
+・NY State Comptroller 監査（Local Law 144の執行）(取得: 2026-08-22): https://www.osc.ny.gov/state-agencies/audits/2025/12/02/enforcement-local-law-144-automated-employment-decision-tools
+・OpenAI Daybreak partner program（取得: 2026-08-22）: https://openai.com/daybreak/partners
+

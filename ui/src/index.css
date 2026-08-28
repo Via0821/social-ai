@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    /* Japanese text needs a little more line height to stay readable. */
+    line-height: 1.8;
+  }
+}
+
+@layer components {
+  /* One shared control size. Large targets — the owner is not a power user. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3
+           text-base font-medium transition
+           focus:outline-none focus-visible:ring-4 focus-visible:ring-sky-300
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-sky-600 text-white hover:bg-sky-700; }
+  .btn-ghost   { @apply btn bg-white text-slate-700 border border-slate-300 hover:bg-slate-100; }
+  .btn-danger  { @apply btn bg-white text-red-600 border border-red-200 hover:bg-red-50; }
+  .card        { @apply rounded-2xl bg-white border border-slate-200 shadow-sm; }
+}

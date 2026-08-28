@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# ============================================================
+# social-hermes — run Hermes against SOCIAL's project-local home.
+#
+# Guarantees every invocation uses Social-ai/.hermes and never the
+# developer's personal ~/.hermes profile.
+#
+# Usage:  ./scripts/social-hermes <hermes args...>
+# ============================================================
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PROJECT_ROOT
+export HERMES_HOME="$PROJECT_ROOT/.hermes"
+
+mkdir -p "$HERMES_HOME"
+
+# Load SOCIAL environment (secrets) if present. Never echoed.
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  set -o allexport
+  # shellcheck disable=SC1091
+  source "$PROJECT_ROOT/.env"
+  set +o allexport
+fi
+
+HERMES_BIN="${HERMES_BIN:-$(command -v hermes || true)}"
+if [[ -z "$HERMES_BIN" ]]; then
+  echo "ERROR: 'hermes' not found on PATH." >&2
+  echo "Install Hermes Agent, or set HERMES_BIN to its absolute path." >&2
+  exit 127
+fi
+
+# Put Hermes' own venv first on PATH, matching what the systemd gateway unit
+# does. Without this the agent's terminal tool resolves python3 to the system
+# 3.8, which has none of Hermes' libraries — the Google Sheets skill then
+# fails on import and the agent quietly falls back to scraping the sheet over
+# the public web. That works only for link-shared sheets and bypasses OAuth
+# entirely, so a private sheet would fail with no obvious cause.
+#
+# Resolved from the hermes entry point rather than hard-coded, so this stays
+# correct on the production host.
+_HERMES_VENV_BIN="$(dirname "$(readlink -f "$HERMES_BIN")")"
+if [[ -x "$_HERMES_VENV_BIN/python3" ]]; then
+  export PATH="$_HERMES_VENV_BIN:$PATH"
+fi
+
+exec "$HERMES_BIN" "$@"
