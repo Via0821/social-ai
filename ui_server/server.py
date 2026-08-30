@@ -121,7 +121,14 @@ async def require_auth(request: Request, call_next):
         return await call_next(request)
 
     if _token_valid(request.cookies.get(COOKIE_NAME, "")):
-        return await call_next(request)
+        response = await call_next(request)
+        # Cloudflare caches by file extension at the edge and will happily
+        # serve a cached .png to an unauthenticated stranger who has the URL —
+        # verified in the wild as cf-cache-status: HIT on a request carrying
+        # no cookie, while the origin itself correctly answered 401. Anything
+        # behind the passphrase must therefore forbid shared caching.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        return response
 
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": "authentication required"}, status_code=401)
@@ -271,7 +278,10 @@ async def _run_turn(message: str, run_id: str | None = None) -> AsyncIterator[by
                     "message": _sanitize(detail) or "応答を取得できませんでした。",
                 }))
             else:
-                await queue.put(_sse("message", {"text": text}))
+                cleaned, attachments = _extract_attachments(text)
+                await queue.put(
+                    _sse("message", {"text": cleaned, "attachments": attachments})
+                )
         except asyncio.TimeoutError:
             proc.kill()
             await queue.put(_sse("error", {"message": "時間内に応答できませんでした。"}))
@@ -436,16 +446,95 @@ async def generate_image(request: Request) -> JSONResponse:
     return JSONResponse({"url": f"/api/image/{dest.name}", "path": str(dest)})
 
 
+# Files SOCIAL produced or the owner uploaded. Only these two directories are
+# ever served, and only by bare filename, so this cannot become a general file
+# reader for the server.
+_SERVABLE_DIRS = (GENERATED_DIR, UPLOAD_DIR)
+_SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
+    ".webm": "audio/webm", ".ogg": "audio/ogg", ".pdf": "application/pdf",
+}
+
+
+def _resolve_servable(name: str) -> Path | None:
+    if not _SAFE_NAME.fullmatch(name) or ".." in name:
+        return None
+    for directory in _SERVABLE_DIRS:
+        candidate = directory / name
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        # resolve() defeats symlinks pointing outside the directory.
+        if resolved.parent == directory.resolve() and resolved.is_file():
+            return resolved
+    return None
+
+
+@app.get("/api/file/{name}")
+async def get_file(name: str, download: int = 0) -> FileResponse:
+    path = _resolve_servable(name)
+    if path is None:
+        raise HTTPException(404, "not found")
+    headers = (
+        {"Content-Disposition": f'attachment; filename="{path.name}"'}
+        if download else {}
+    )
+    return FileResponse(
+        path,
+        media_type=_MIME.get(path.suffix.lower(), "application/octet-stream"),
+        headers=headers,
+    )
+
+
 @app.get("/api/image/{name}")
 async def get_image(name: str) -> FileResponse:
-    # Reject anything that is not one of our generated filenames, so this
-    # cannot be turned into an arbitrary file reader.
-    if not re.fullmatch(r"\d+_[0-9a-f]{12}\.png", name):
-        raise HTTPException(404, "not found")
-    path = GENERATED_DIR / name
-    if not path.is_file():
-        raise HTTPException(404, "not found")
-    return FileResponse(path, media_type="image/png")
+    """Kept for links already sitting in the owner's saved chat history."""
+    return await get_file(name)
+
+
+# A reply may name a file SOCIAL produced — either as Hermes' MEDIA: tag or
+# as a bare path, which is what the agent does when it calls
+# scripts/generate-image.sh. Printing that path to a browser is useless: the
+# file lives on the VPS. Turn any such mention into a URL the page can render
+# and the owner can download, and strip the raw path from the text.
+_MEDIA_TAG = re.compile(r"MEDIA:\s*(\S+)")
+_BARE_PATH = re.compile(r"(?:/[\w.\-]+)*/(?:generated|uploads)/([A-Za-z0-9._-]+)")
+
+
+def _extract_attachments(text: str) -> tuple[str, list[dict]]:
+    found: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> bool:
+        path = _resolve_servable(name)
+        if path is None or name in seen:
+            return False
+        seen.add(name)
+        found.append({
+            "name": name,
+            "url": f"/api/file/{name}",
+            "download_url": f"/api/file/{name}?download=1",
+            "kind": _kind_for(path.suffix.lower()),
+        })
+        return True
+
+    for raw in _MEDIA_TAG.findall(text):
+        _add(Path(raw).name)
+    for name in _BARE_PATH.findall(text):
+        _add(name)
+
+    cleaned = _MEDIA_TAG.sub("", text)
+    cleaned = _BARE_PATH.sub("", cleaned)
+    # Tidy the wording left behind once the path is gone.
+    cleaned = re.sub(r"[：:]\s*$", "", cleaned.strip(), flags=re.M)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if found and not cleaned:
+        cleaned = "画像を作成しました。"
+    return cleaned, found
 
 
 # --------------------------------------------------------------------------

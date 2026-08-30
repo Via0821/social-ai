@@ -10,9 +10,17 @@ export type MemoryItem = {
   text: string;
 };
 
+/** A file SOCIAL produced or the owner uploaded, served back over HTTP. */
+export type ReplyFile = {
+  name: string;
+  url: string;
+  download_url: string;
+  kind: "image" | "audio" | "file";
+};
+
 export type StreamHandlers = {
   onProgress?: (elapsedSeconds: number) => void;
-  onMessage: (text: string) => void;
+  onMessage: (text: string, files?: ReplyFile[]) => void;
   onError: (message: string) => void;
 };
 
@@ -71,7 +79,8 @@ async function streamSSE(
       }
 
       if (event === "progress") handlers.onProgress?.(payload.elapsed ?? 0);
-      else if (event === "message") handlers.onMessage(payload.text ?? "");
+      else if (event === "message")
+        handlers.onMessage(payload.text ?? "", payload.attachments ?? []);
       else if (event === "error") handlers.onError(payload.message ?? "エラーが発生しました。");
     }
   }

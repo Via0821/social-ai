@@ -3,9 +3,14 @@ import { api, type Attachment } from "../lib/api";
 import { loadHistory, saveHistory, clearHistory, type Msg } from "../lib/history";
 import VoiceMode from "./VoiceMode";
 
-/** Phrases that mean "draw me something" rather than "answer me something". */
+/**
+ * A fast path for obvious image requests — it skips an agent round-trip.
+ * Only an optimisation: when it misses, the agent generates the image itself
+ * and the server turns the resulting path into a rendered attachment, so the
+ * outcome is the same either way.
+ */
 const IMAGE_INTENT =
-  /(画像|イラスト|絵|写真|图)(を)?(作|生成|描|つく|書)|image of|draw me|generate an image/i;
+  /(画像|イメージ|イラスト|絵|写真|図|图)\s*(を)?\s*(作|生成|描|つく|書|出)|image of|draw me|generate an image/i;
 
 export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>(loadHistory);
@@ -57,7 +62,17 @@ export default function Chat() {
     if (!attachment && IMAGE_INTENT.test(trimmed)) {
       try {
         const url = await api.generateImage(trimmed);
-        push({ role: "social", text: "画像を作成しました。", imageUrl: url });
+        const name = url.split("/").pop() ?? "image.png";
+        push({
+          role: "social",
+          text: "画像を作成しました。",
+          files: [{
+            name,
+            url,
+            download_url: `/api/file/${name}?download=1`,
+            kind: "image",
+          }],
+        });
       } catch {
         push({ role: "social", text: "画像を生成できませんでした。", error: true });
       }
@@ -70,7 +85,7 @@ export default function Chat() {
 
     await api.sendMessage(outgoing, {
       onProgress: setElapsed,
-      onMessage: (t) => push({ role: "social", text: t }),
+      onMessage: (t, files) => push({ role: "social", text: t, files }),
       onError: (msg) => push({ role: "social", text: msg, error: true }),
     }, runId);
 
@@ -257,14 +272,48 @@ function Bubble({ msg, onSpeak }: { msg: Msg; onSpeak: () => void }) {
       }`}
     >
       {msg.text}
-      {msg.imageUrl && (
-        <img
-          src={msg.imageUrl}
-          alt="生成された画像"
-          className="mt-3 max-w-full rounded-xl border border-slate-200"
-        />
+
+      {msg.files?.map((f) =>
+        f.kind === "image" ? (
+          <figure key={f.name} className="mt-3">
+            <img
+              src={f.url}
+              alt="SOCIALが生成した画像"
+              className="max-w-full rounded-xl border border-slate-200"
+            />
+            <figcaption className="mt-2 flex gap-3">
+              <a
+                href={f.download_url}
+                download={f.name}
+                className="text-sm text-sky-700 hover:underline"
+              >
+                ⬇ 画像を保存
+              </a>
+              <a
+                href={f.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-slate-500 hover:underline"
+              >
+                別タブで開く
+              </a>
+            </figcaption>
+          </figure>
+        ) : f.kind === "audio" ? (
+          <audio key={f.name} controls src={f.url} className="mt-3 w-full" />
+        ) : (
+          <a
+            key={f.name}
+            href={f.download_url}
+            download={f.name}
+            className="mt-3 block text-sm text-sky-700 hover:underline"
+          >
+            ⬇ {f.name}
+          </a>
+        ),
       )}
-      {!msg.error && !msg.imageUrl && (
+
+      {!msg.error && !msg.files?.length && (
         <button onClick={onSpeak} className="mt-2 block text-sm text-sky-700 hover:underline">
           🔊 読み上げる
         </button>

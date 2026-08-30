@@ -139,6 +139,52 @@ Verified: unauthenticated page → 303 to `/login`; unauthenticated API → 401;
 wrong passphrase → 401 after a 1s delay; correct → cookie set, 30-day expiry;
 tampered cookie → 401.
 
+## Files SOCIAL produces
+
+A reply may name a file on the server — Hermes' `MEDIA:<path>` tag, or a bare
+path when the agent calls `scripts/generate-image.sh`. **Printing that path
+to the browser is useless**: the file is on the VPS, and the owner would have
+to SSH in to fetch it. That is exactly what happened on 2026-08-30 — an image
+was generated correctly and the reply showed
+`/home/dev/Social-ai/.hermes/generated/….png` as text.
+
+`_extract_attachments` now scans every reply for both forms, resolves them
+against the two directories that may ever be served
+(`.hermes/generated`, `.hermes/uploads`), rewrites them into
+`/api/file/<name>` URLs and strips the raw path from the text. The UI renders
+images inline with **画像を保存** and **別タブで開く**, plays audio in a
+player, and offers anything else as a download.
+
+Resolution is by bare filename only, `resolve(strict=True)` defeats symlinks
+pointing elsewhere, and the parent directory must match exactly — so
+`MEDIA:/etc/passwd` and `../../..` traversal both return nothing. Verified.
+
+A regex in `Chat.tsx` still short-circuits obvious image requests to skip an
+agent round-trip, but it is only an optimisation. It originally missed
+「イメージを生成して」 because the alternation lacked イメージ; broadened, but
+correctness no longer depends on it, because the server handles the agent
+path too.
+
+## Cloudflare will cache authenticated files unless told not to
+
+Found while testing the above, and worth stating plainly: an unauthenticated
+request for a generated image returned **HTTP 200** through
+`social-ai01.com`, while the same request straight to `127.0.0.1:9200`
+returned 401.
+
+The origin was right; Cloudflare had cached the `.png` at the edge
+(`cf-cache-status: HIT`, `age: 18`, `cache-control: max-age=14400`) and was
+serving it to anyone holding the URL — no passphrase involved.
+
+Every authenticated response now carries `Cache-Control: private, no-store,
+max-age=0`, set in the auth middleware so it covers all of them rather than
+just the file route. Re-verified: `cf-cache-status: BYPASS`, and
+unauthenticated requests return 401 consistently.
+
+Filenames are unguessable (timestamp plus 12 hex chars), so exposure required
+knowing the exact URL — but anything served behind a passphrase must forbid
+shared caching, whatever the extension.
+
 ## Installable app (PWA)
 
 `manifest.webmanifest` plus a small service worker make the browser offer
