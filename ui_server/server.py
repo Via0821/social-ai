@@ -236,7 +236,13 @@ def _sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
-async def _run_turn(message: str) -> AsyncIterator[bytes]:
+# Running turns, so a client disconnect can kill the subprocess. Without
+# this, pressing Stop only closed the browser's stream while Hermes kept
+# working — burning API budget on an answer nobody would see.
+_ACTIVE_RUNS: dict[str, asyncio.subprocess.Process] = {}
+
+
+async def _run_turn(message: str, run_id: str | None = None) -> AsyncIterator[bytes]:
     """Run one Hermes turn, streaming progress then the final reply."""
     started = time.monotonic()
     yield _sse("start", {"at": started})
@@ -247,6 +253,8 @@ async def _run_turn(message: str) -> AsyncIterator[bytes]:
         stderr=asyncio.subprocess.PIPE,
         cwd=str(PROJECT_ROOT),
     )
+    if run_id:
+        _ACTIVE_RUNS[run_id] = proc
 
     # Tool-using turns are slow. A heartbeat keeps the UI showing
     # "考えています…" instead of looking hung.
@@ -285,6 +293,8 @@ async def _run_turn(message: str) -> AsyncIterator[bytes]:
         proc_task.cancel()
         if proc.returncode is None:
             proc.kill()
+        if run_id:
+            _ACTIVE_RUNS.pop(run_id, None)
     yield _sse("done", {"elapsed": round(time.monotonic() - started, 1)})
 
 
@@ -306,13 +316,136 @@ def _sanitize(text: str) -> str:
 async def chat(request: Request) -> StreamingResponse:
     body = await request.json()
     message = (body.get("message") or "").strip()
+    run_id = (body.get("run_id") or "").strip() or None
     if not message:
         raise HTTPException(400, "message is required")
     return StreamingResponse(
-        _run_turn(message),
+        _run_turn(message, run_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/chat/stop")
+async def stop_chat(request: Request) -> JSONResponse:
+    """Kill a turn the owner asked to stop."""
+    run_id = ((await request.json()).get("run_id") or "").strip()
+    proc = _ACTIVE_RUNS.pop(run_id, None)
+    if proc is None:
+        return JSONResponse({"stopped": False})
+    if proc.returncode is None:
+        proc.kill()
+    return JSONResponse({"stopped": True})
+
+
+# --------------------------------------------------------------------------
+# Attachments
+#
+# Files are written under HERMES_HOME so the agent can reach them by path —
+# Hermes' vision, transcription and file tools all take local paths. Names are
+# regenerated rather than trusted, so an uploaded name cannot escape the
+# directory or overwrite anything.
+# --------------------------------------------------------------------------
+
+UPLOAD_DIR = HERMES_HOME / "uploads"
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic"}
+AUDIO_EXT = {".mp3", ".m4a", ".wav", ".webm", ".ogg", ".oga", ".flac", ".aac"}
+
+
+def _kind_for(suffix: str) -> str:
+    if suffix in IMAGE_EXT:
+        return "image"
+    if suffix in AUDIO_EXT:
+        return "audio"
+    return "file"
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile = File(...)) -> JSONResponse:
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空のファイルです")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "ファイルが大きすぎます（上限25MB）")
+
+    suffix = Path(file.filename or "").suffix.lower()[:12]
+    if not re.fullmatch(r"\.[a-z0-9]{1,10}", suffix or ""):
+        suffix = ""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest = UPLOAD_DIR / f"{int(time.time())}_{secrets.token_hex(6)}{suffix}"
+    dest.write_bytes(data)
+    dest.chmod(0o600)
+
+    return JSONResponse({
+        "path": str(dest),
+        "name": file.filename or dest.name,
+        "kind": _kind_for(suffix),
+        "size": len(data),
+    })
+
+
+# --------------------------------------------------------------------------
+# Image generation
+#
+# Hermes' built-in image tool routes through fal.ai and needs FAL_KEY — a
+# second paid vendor. The owner's OpenAI account already carries gpt-image-*,
+# so generate there instead: no new subscription, no new credential.
+# --------------------------------------------------------------------------
+
+GENERATED_DIR = HERMES_HOME / "generated"
+
+
+@app.post("/api/image/generate")
+async def generate_image(request: Request) -> JSONResponse:
+    import httpx
+    body = await request.json()
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "prompt is required")
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        r = await client.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {_openai_key()}"},
+            json={
+                "model": os.environ.get("SOCIAL_IMAGE_MODEL", "gpt-image-1"),
+                "prompt": prompt,
+                "size": body.get("size", "1024x1024"),
+                "n": 1,
+            },
+        )
+    if r.status_code != 200:
+        log.error("image generation failed: %s", r.status_code)
+        raise HTTPException(502, "画像を生成できませんでした。")
+
+    item = (r.json().get("data") or [{}])[0]
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    dest = GENERATED_DIR / f"{int(time.time())}_{secrets.token_hex(6)}.png"
+
+    if item.get("b64_json"):
+        import base64
+        dest.write_bytes(base64.b64decode(item["b64_json"]))
+    elif item.get("url"):
+        async with httpx.AsyncClient(timeout=120) as client:
+            dest.write_bytes((await client.get(item["url"])).content)
+    else:
+        raise HTTPException(502, "画像データが返りませんでした。")
+
+    return JSONResponse({"url": f"/api/image/{dest.name}", "path": str(dest)})
+
+
+@app.get("/api/image/{name}")
+async def get_image(name: str) -> FileResponse:
+    # Reject anything that is not one of our generated filenames, so this
+    # cannot be turned into an arbitrary file reader.
+    if not re.fullmatch(r"\d+_[0-9a-f]{12}\.png", name):
+        raise HTTPException(404, "not found")
+    path = GENERATED_DIR / name
+    if not path.is_file():
+        raise HTTPException(404, "not found")
+    return FileResponse(path, media_type="image/png")
 
 
 # --------------------------------------------------------------------------
