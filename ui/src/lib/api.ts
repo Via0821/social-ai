@@ -1,5 +1,7 @@
 /** Thin client for the SOCIAL UI adapter. Same origin in dev and production. */
 
+import { extensionFor } from "./recorder";
+
 /** One remembered entry. Hermes keeps two stores; `label` says which. */
 export type MemoryItem = {
   id: string;
@@ -75,9 +77,52 @@ async function streamSSE(
   }
 }
 
+export type Attachment = {
+  path: string;
+  name: string;
+  kind: "image" | "audio" | "file";
+  size: number;
+};
+
 export const api = {
-  sendMessage: (message: string, h: StreamHandlers, signal?: AbortSignal) =>
-    streamSSE("/api/chat", { message }, h, signal),
+  sendMessage: (
+    message: string,
+    h: StreamHandlers,
+    runId?: string,
+    signal?: AbortSignal,
+  ) => streamSSE("/api/chat", { message, run_id: runId }, h, signal),
+
+  /** Kill a turn server-side. Closing the stream alone leaves Hermes running. */
+  async stopMessage(runId: string): Promise<void> {
+    await fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runId }),
+    }).catch(() => {});
+  },
+
+  async upload(file: File): Promise<Attachment> {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    if (!r.ok) {
+      throw new Error(
+        r.status === 413 ? "ファイルが大きすぎます（上限25MB）"
+                         : "ファイルを送信できませんでした。",
+      );
+    }
+    return r.json();
+  },
+
+  async generateImage(prompt: string): Promise<string> {
+    const r = await fetch("/api/image/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    if (!r.ok) throw new Error("画像を生成できませんでした。");
+    return (await r.json()).url;
+  },
 
   runBrief: (h: StreamHandlers, signal?: AbortSignal) =>
     streamSSE("/api/brief/run", {}, h, signal),
@@ -103,7 +148,9 @@ export const api = {
 
   async transcribe(blob: Blob): Promise<string> {
     const fd = new FormData();
-    fd.append("file", blob, "voice.webm");
+    // Name it after what the browser actually recorded — Safari produces
+    // audio/mp4, and sending it as .webm makes the API reject the bytes.
+    fd.append("file", blob, `voice.${extensionFor(blob)}`);
     const r = await fetch("/api/voice/transcribe", { method: "POST", body: fd });
     if (!r.ok) throw new Error("音声を認識できませんでした。");
     return (await r.json()).text ?? "";
