@@ -2,25 +2,139 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------
+   SOCIAL — dark theme
+   Built from the owner's mockups: near-black ground, a blue glow that
+   reads as the product's identity, and generous touch targets.
+   ------------------------------------------------------------------ */
+
+:root {
+  --bg: #05070d;
+  --bg-raised: #0c111c;
+  --bg-input: #111827;
+  --line: #1e293b;
+  --text: #e8eefc;
+  --text-dim: #8b9bb8;
+  --accent: #2f80ff;
+  --accent-soft: #5aa2ff;
+}
+
 @layer base {
   html, body, #root { height: 100%; }
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
-    /* Japanese text needs a little more line height to stay readable. */
-    line-height: 1.8;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.8;           /* Japanese needs the extra leading */
+    -webkit-font-smoothing: antialiased;
+    /* Safari: keep content clear of the home indicator and notch. */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  /* A faint glow behind everything, matching the mockup's depth. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 60% at 50% 8%, rgba(47,128,255,.16), transparent 60%),
+      radial-gradient(80% 50% at 50% 100%, rgba(47,128,255,.10), transparent 70%);
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb {
+    background: #1f2a3d; border-radius: 4px;
   }
 }
 
 @layer components {
-  /* One shared control size. Large targets — the owner is not a power user. */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3
            text-base font-medium transition
-           focus:outline-none focus-visible:ring-4 focus-visible:ring-sky-300
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
-  .btn-primary { @apply btn bg-sky-600 text-white hover:bg-sky-700; }
-  .btn-ghost   { @apply btn bg-white text-slate-700 border border-slate-300 hover:bg-slate-100; }
-  .btn-danger  { @apply btn bg-white text-red-600 border border-red-200 hover:bg-red-50; }
-  .card        { @apply rounded-2xl bg-white border border-slate-200 shadow-sm; }
+  .btn-primary {
+    @apply btn text-white;
+    background: var(--accent);
+    box-shadow: 0 6px 24px -8px rgba(47,128,255,.8);
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-soft); }
+  .btn-ghost {
+    @apply btn;
+    color: var(--text-dim);
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--line);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    color: var(--text);
+    background: rgba(255,255,255,.08);
+  }
+  .btn-danger {
+    @apply btn;
+    color: #fca5a5;
+    background: rgba(239,68,68,.08);
+    border: 1px solid rgba(239,68,68,.3);
+  }
+  .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,.16); }
+
+  .card {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    @apply rounded-2xl;
+  }
+
+  .field {
+    background: var(--bg-input);
+    border: 1px solid var(--line);
+    color: var(--text);
+    @apply rounded-2xl;
+  }
+  .field::placeholder { color: #5b6b85; }
+  .field:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(47,128,255,.18);
+  }
+}
+
+/* ------------------------------------------------------------------
+   Orb animation
+   Pure CSS/SVG — the owner asked for something lightweight rather than
+   video or a paid service. Four states, each with its own motion.
+   ------------------------------------------------------------------ */
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1);    opacity: .85; }
+  50%      { transform: scale(1.05); opacity: 1;   }
+}
+@keyframes orb-spin   { to { transform: rotate(360deg); } }
+@keyframes orb-pulse  {
+  0%, 100% { transform: scale(1);    }
+  50%      { transform: scale(1.09); }
+}
+@keyframes ring-out {
+  0%   { transform: scale(.85); opacity: .55; }
+  100% { transform: scale(1.5); opacity: 0;   }
+}
+@keyframes bar {
+  0%, 100% { transform: scaleY(.25); }
+  50%      { transform: scaleY(1);   }
+}
+
+.orb-idle      { animation: orb-breathe 4.5s ease-in-out infinite; }
+.orb-listening { animation: orb-pulse   1.1s ease-in-out infinite; }
+.orb-thinking  { animation: orb-breathe 2.2s ease-in-out infinite; }
+.orb-speaking  { animation: orb-pulse    .7s ease-in-out infinite; }
+
+.orb-swirl        { transform-origin: 50% 50%; animation: orb-spin 24s linear infinite; }
+.orb-swirl-fast   { transform-origin: 50% 50%; animation: orb-spin  6s linear infinite; }
+
+.ring-pulse { animation: ring-out 2.6s ease-out infinite; }
+.wave-bar   { animation: bar .9s ease-in-out infinite; transform-origin: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-idle, .orb-listening, .orb-thinking, .orb-speaking,
+  .orb-swirl, .orb-swirl-fast, .ring-pulse, .wave-bar {
+    animation: none;
+  }
 }

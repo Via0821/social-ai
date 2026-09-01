@@ -31,12 +31,12 @@ export default function Brief() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-8 sm:px-8">
+    <div className="h-full overflow-y-auto px-5 pb-28 pt-6">
       <div className="mx-auto max-w-3xl">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">デイリーブリーフ</h1>
-            <p className="mt-2 text-slate-600">
+            <p className="mt-2" style={{ color: "var(--text-dim)" }}>
               市場・ニュース・AI・採用市場のまとめです。
             </p>
           </div>
@@ -46,9 +46,9 @@ export default function Brief() {
         </div>
 
         {running && (
-          <div className="card mt-6 p-5 text-slate-600">
+          <div className="card mt-6 p-5 ">
             最新情報を調べています… （{elapsed}秒）
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm" style={{ color: "var(--text-dim)" }}>
               6項目を調査するため、数分かかります。この画面は開いたままで大丈夫です。
             </p>
           </div>
@@ -63,7 +63,7 @@ export default function Brief() {
         {text ? (
           <article className="card mt-6 p-6">
             {date && (
-              <p className="mb-4 text-sm text-slate-500">最終更新: {date}</p>
+              <p className="mb-4 text-sm" style={{ color: "var(--text-dim)" }}>最終更新: {date}</p>
             )}
             <pre className="whitespace-pre-wrap break-words font-sans text-base leading-8">
               {text}
@@ -71,7 +71,7 @@ export default function Brief() {
           </article>
         ) : (
           !running && (
-            <div className="card mt-6 p-8 text-center text-slate-600">
+            <div className="card mt-6 p-8 text-center ">
               まだブリーフがありません。「今すぐ作成」を押してください。
             </div>
           )

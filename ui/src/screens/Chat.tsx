@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Attachment } from "../lib/api";
 import { loadHistory, saveHistory, clearHistory, type Msg } from "../lib/history";
-import VoiceMode from "./VoiceMode";
 
 /**
  * A fast path for obvious image requests — it skips an agent round-trip.
@@ -19,7 +18,6 @@ export default function Chat() {
   const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Attachment | null>(null);
-  const [voiceMode, setVoiceMode] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -50,7 +48,15 @@ export default function Chat() {
     push({
       role: "user",
       text: trimmed || `（${attachment?.name} を送信）`,
-      attachment: attachment ? { name: attachment.name, kind: attachment.kind } : undefined,
+      attachment: attachment
+        ? {
+            name: attachment.name,
+            kind: attachment.kind,
+            // Uploads are served back by filename, so the owner can reopen
+            // what they sent from anywhere in the transcript.
+            url: `/api/file/${attachment.path.split("/").pop()}`,
+          }
+        : undefined,
     });
     setInput("");
     setPending(null);
@@ -117,11 +123,9 @@ export default function Chat() {
     }
   }
 
-  if (voiceMode) return <VoiceMode onClose={() => setVoiceMode(false)} />;
-
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-end gap-2 border-b border-slate-200 bg-white px-4 py-2 sm:px-8">
+      <div className="flex items-center justify-end gap-2 px-4 py-1 sm:px-8">
         {messages.length > 0 && (
           <button
             onClick={() => {
@@ -130,7 +134,7 @@ export default function Chat() {
                 setMessages([]);
               }
             }}
-            className="text-sm text-slate-500 hover:text-slate-800"
+            className="text-sm" style={{ color: "var(--text-dim)" }}
           >
             履歴を消す
           </button>
@@ -141,8 +145,12 @@ export default function Chat() {
         <div className="mx-auto flex min-h-full max-w-3xl flex-col gap-4">
           {messages.length === 0 && !busy && (
             <div className="m-auto text-center">
-              <p className="text-lg font-medium text-slate-700">こんにちは。SOCIALです。</p>
-              <p className="mt-2 text-slate-500">何でも日本語で話しかけてください。</p>
+              <p className="text-lg font-medium">
+                こんにちは。<span style={{ color: "var(--accent-soft)" }}>SOCIAL</span>です。
+              </p>
+              <p className="mt-2" style={{ color: "var(--text-dim)" }}>
+                何でも日本語で話しかけてください。
+              </p>
             </div>
           )}
 
@@ -151,7 +159,7 @@ export default function Chat() {
           ))}
 
           {busy && (
-            <div className="self-start rounded-2xl border border-slate-200 bg-white px-5 py-3 text-slate-500">
+            <div className="card self-start px-5 py-3" style={{ color: "var(--text-dim)" }}>
               <span className="inline-flex items-center gap-2">
                 <Dots />
                 考えています…
@@ -160,7 +168,7 @@ export default function Chat() {
                 )}
                 <button
                   onClick={() => void stop()}
-                  className="ml-2 rounded-lg border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100"
+                  className="btn-ghost ml-2 !rounded-lg !px-3 !py-1 !text-sm"
                 >
                   ■ 停止
                 </button>
@@ -172,26 +180,28 @@ export default function Chat() {
       </div>
 
       {notice && (
-        <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 text-center text-amber-900">
+        <div className="px-4 py-3 text-center text-sm text-amber-300"
+             style={{ background: "rgba(245,158,11,.1)" }}>
           {notice}
         </div>
       )}
 
       {pending && (
-        <div className="flex items-center gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-8">
-          <span className="text-sm text-slate-600">
+        <div className="flex items-center gap-3 px-4 py-3 sm:px-8"
+             style={{ borderTop: "1px solid var(--line)" }}>
+          <span className="text-sm" style={{ color: "var(--text-dim)" }}>
             添付：{pending.name}
           </span>
           <button
             onClick={() => setPending(null)}
-            className="text-sm text-slate-500 hover:text-red-600"
+            className="text-sm text-red-400 hover:text-red-300"
           >
             取り消す
           </button>
         </div>
       )}
 
-      <div className="border-t border-slate-200 bg-white px-4 py-4 sm:px-8">
+      <div className="px-4 py-3 sm:px-8" style={{ borderTop: "1px solid var(--line)" }}>
         <div className="mx-auto flex max-w-3xl items-end gap-1.5 sm:gap-2">
           <input
             ref={fileRef}
@@ -224,19 +234,10 @@ export default function Chat() {
             rows={1}
             placeholder="メッセージを入力…"
             disabled={busy}
-            className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300
-                       px-3 py-3 text-base focus:border-sky-500 focus:outline-none
-                       focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 sm:px-4"
+            className="field min-w-0 flex-1 resize-none px-4 py-3 text-base
+                       disabled:opacity-50"
             style={{ maxHeight: "9rem" }}
           />
-          <button
-            onClick={() => setVoiceMode(true)}
-            disabled={busy}
-            aria-label="音声で会話する"
-            className="btn-ghost shrink-0 !px-3 !py-3 sm:!px-4"
-          >
-            🎤
-          </button>
           <button
             onClick={() => void send(input)}
             disabled={busy || (!input.trim() && !pending)}
@@ -258,7 +259,20 @@ function Bubble({ msg, onSpeak }: { msg: Msg; onSpeak: () => void }) {
       <div className="self-end max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-sky-600 px-5 py-3 text-white">
         {msg.text}
         {msg.attachment && (
-          <span className="mt-1 block text-sm text-sky-100">📎 {msg.attachment.name}</span>
+          msg.attachment.url ? (
+            <a
+              href={msg.attachment.url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 block text-sm text-sky-100 underline underline-offset-2"
+            >
+              📎 {msg.attachment.name}
+            </a>
+          ) : (
+            <span className="mt-1 block text-sm text-sky-100">
+              📎 {msg.attachment.name}
+            </span>
+          )
         )}
       </div>
     );
@@ -267,8 +281,8 @@ function Bubble({ msg, onSpeak }: { msg: Msg; onSpeak: () => void }) {
     <div
       className={`self-start max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-5 py-3 ${
         msg.error
-          ? "border border-red-200 bg-red-50 text-red-800"
-          : "border border-slate-200 bg-white"
+          ? "border border-red-500/30 bg-red-500/10 text-red-300"
+          : "card"
       }`}
     >
       {msg.text}
@@ -293,7 +307,7 @@ function Bubble({ msg, onSpeak }: { msg: Msg; onSpeak: () => void }) {
                 href={f.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sm text-slate-500 hover:underline"
+                className="text-sm hover:underline" style={{ color: "var(--text-dim)" }}
               >
                 別タブで開く
               </a>
@@ -328,7 +342,7 @@ function Dots() {
       {[0, 150, 300].map((d) => (
         <span
           key={d}
-          className="h-2 w-2 animate-bounce rounded-full bg-slate-400"
+          className="h-2 w-2 animate-bounce rounded-full bg-sky-400"
           style={{ animationDelay: `${d}ms` }}
         />
       ))}

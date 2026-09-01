@@ -752,6 +752,97 @@ async def speak(request: Request) -> Response:
 # Status + static SPA
 # --------------------------------------------------------------------------
 
+# A configured key is not a working one. The account ran out of credit on
+# 2026-08-30 and every feature stopped, while a key-presence check still
+# reported "connected" — exactly the wrong thing to show someone wondering
+# why nothing answers. So probe a real billed call, and cache it: this runs
+# on every CONNECTIONS view and must not add cost or latency of its own.
+_OPENAI_HEALTH: dict[str, object] = {"at": 0.0, "ok": False, "detail": ""}
+_OPENAI_HEALTH_TTL = 300
+
+
+async def _openai_health() -> tuple[bool, str]:
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key:
+        return False, "未設定"
+
+    if time.time() - float(_OPENAI_HEALTH["at"]) < _OPENAI_HEALTH_TTL:
+        return bool(_OPENAI_HEALTH["ok"]), str(_OPENAI_HEALTH["detail"])
+
+    import httpx
+    ok, detail = False, "確認できませんでした"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": os.environ.get("SOCIAL_HEALTH_MODEL", "gpt-5-nano"),
+                      "messages": [{"role": "user", "content": "."}],
+                      "max_completion_tokens": 1},
+            )
+        if r.status_code == 200:
+            ok, detail = True, "GPT / 音声 / 画像"
+        else:
+            code = (r.json().get("error") or {}).get("code", "")
+            detail = {
+                "credit_balance_exhausted":
+                    "⚠ 残高切れです。チャージが必要です",
+                "insufficient_quota":
+                    "⚠ 利用枠を使い切っています",
+                "invalid_api_key": "⚠ APIキーが無効です",
+                "rate_limit_exceeded": "一時的に混雑しています",
+            }.get(code, f"⚠ 利用できません（{code or r.status_code}）")
+    except Exception:
+        detail = "接続を確認できませんでした"
+
+    _OPENAI_HEALTH.update({"at": time.time(), "ok": ok, "detail": detail})
+    return ok, detail
+
+
+@app.get("/api/connections")
+async def connections() -> JSONResponse:
+    """What SOCIAL is wired up to, for the CONNECTIONS screen.
+
+    Reports only whether each integration is configured — never a key, an id,
+    or a token. Designed to grow as integrations are added.
+    """
+    token_file = HERMES_HOME / "google_token.json"
+    google_ok = token_file.exists()
+    google_detail = ""
+    if google_ok:
+        try:
+            scopes = json.loads(token_file.read_text()).get("scopes") or []
+            google_detail = (
+                "スプレッドシートの閲覧のみ"
+                if any(s.endswith("spreadsheets.readonly") for s in scopes)
+                else f"{len(scopes)}件の権限"
+            )
+        except Exception:
+            google_detail = "設定済み"
+
+    openai_ok, openai_detail = await _openai_health()
+
+    items = [
+        {"id": "openai", "name": "OpenAI", "label": "会話・音声・画像生成",
+         "connected": openai_ok, "detail": openai_detail},
+        {"id": "line", "name": "LINE", "label": "スマートフォンからの会話",
+         "connected": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+                           and os.environ.get("LINE_OWNER_USER_ID")),
+         "detail": "オーナー専用（他の人は利用できません）"},
+        {"id": "google_sheets", "name": "Google スプレッドシート",
+         "label": "表の読み取り・要約",
+         "connected": google_ok, "detail": google_detail or "未接続"},
+        {"id": "web", "name": "Web検索", "label": "最新情報の取得",
+         "connected": True, "detail": "追加の契約なしで利用中"},
+        {"id": "market", "name": "株価・市場データ", "label": "指数・銘柄の取得",
+         "connected": True, "detail": "Yahoo Finance（読み取りのみ）"},
+        {"id": "brief", "name": "デイリーブリーフ", "label": "平日朝8:00の自動配信",
+         "connected": bool(os.environ.get("LINE_OWNER_USER_ID")),
+         "detail": "LINEと専用画面に配信"},
+    ]
+    return JSONResponse({"items": items})
+
+
 @app.get("/api/status")
 async def status() -> JSONResponse:
     gw = shutil.which("systemctl") is not None and os.system(

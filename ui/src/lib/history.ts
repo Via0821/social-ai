@@ -24,7 +24,8 @@ export type Msg = {
   error?: boolean;
   /** Files SOCIAL produced with this reply — rendered inline, downloadable. */
   files?: ReplyFile[];
-  attachment?: { name: string; kind: string };
+  /** What the owner sent up. Carries a URL so it stays openable later. */
+  attachment?: { name: string; kind: string; url?: string };
   at?: number;
 };
 
