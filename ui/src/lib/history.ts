@@ -11,12 +11,21 @@
  * make these throw rather than return empty.
  */
 
+export type ReplyFile = {
+  name: string;
+  url: string;
+  download_url: string;
+  kind: "image" | "audio" | "file";
+};
+
 export type Msg = {
   role: "user" | "social";
   text: string;
   error?: boolean;
-  imageUrl?: string;
-  attachment?: { name: string; kind: string };
+  /** Files SOCIAL produced with this reply — rendered inline, downloadable. */
+  files?: ReplyFile[];
+  /** What the owner sent up. Carries a URL so it stays openable later. */
+  attachment?: { name: string; kind: string; url?: string };
   at?: number;
 };
 

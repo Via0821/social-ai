@@ -121,7 +121,14 @@ async def require_auth(request: Request, call_next):
         return await call_next(request)
 
     if _token_valid(request.cookies.get(COOKIE_NAME, "")):
-        return await call_next(request)
+        response = await call_next(request)
+        # Cloudflare caches by file extension at the edge and will happily
+        # serve a cached .png to an unauthenticated stranger who has the URL —
+        # verified in the wild as cf-cache-status: HIT on a request carrying
+        # no cookie, while the origin itself correctly answered 401. Anything
+        # behind the passphrase must therefore forbid shared caching.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        return response
 
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": "authentication required"}, status_code=401)
@@ -271,7 +278,10 @@ async def _run_turn(message: str, run_id: str | None = None) -> AsyncIterator[by
                     "message": _sanitize(detail) or "応答を取得できませんでした。",
                 }))
             else:
-                await queue.put(_sse("message", {"text": text}))
+                cleaned, attachments = _extract_attachments(text)
+                await queue.put(
+                    _sse("message", {"text": cleaned, "attachments": attachments})
+                )
         except asyncio.TimeoutError:
             proc.kill()
             await queue.put(_sse("error", {"message": "時間内に応答できませんでした。"}))
@@ -436,16 +446,95 @@ async def generate_image(request: Request) -> JSONResponse:
     return JSONResponse({"url": f"/api/image/{dest.name}", "path": str(dest)})
 
 
+# Files SOCIAL produced or the owner uploaded. Only these two directories are
+# ever served, and only by bare filename, so this cannot become a general file
+# reader for the server.
+_SERVABLE_DIRS = (GENERATED_DIR, UPLOAD_DIR)
+_SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
+    ".webm": "audio/webm", ".ogg": "audio/ogg", ".pdf": "application/pdf",
+}
+
+
+def _resolve_servable(name: str) -> Path | None:
+    if not _SAFE_NAME.fullmatch(name) or ".." in name:
+        return None
+    for directory in _SERVABLE_DIRS:
+        candidate = directory / name
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        # resolve() defeats symlinks pointing outside the directory.
+        if resolved.parent == directory.resolve() and resolved.is_file():
+            return resolved
+    return None
+
+
+@app.get("/api/file/{name}")
+async def get_file(name: str, download: int = 0) -> FileResponse:
+    path = _resolve_servable(name)
+    if path is None:
+        raise HTTPException(404, "not found")
+    headers = (
+        {"Content-Disposition": f'attachment; filename="{path.name}"'}
+        if download else {}
+    )
+    return FileResponse(
+        path,
+        media_type=_MIME.get(path.suffix.lower(), "application/octet-stream"),
+        headers=headers,
+    )
+
+
 @app.get("/api/image/{name}")
 async def get_image(name: str) -> FileResponse:
-    # Reject anything that is not one of our generated filenames, so this
-    # cannot be turned into an arbitrary file reader.
-    if not re.fullmatch(r"\d+_[0-9a-f]{12}\.png", name):
-        raise HTTPException(404, "not found")
-    path = GENERATED_DIR / name
-    if not path.is_file():
-        raise HTTPException(404, "not found")
-    return FileResponse(path, media_type="image/png")
+    """Kept for links already sitting in the owner's saved chat history."""
+    return await get_file(name)
+
+
+# A reply may name a file SOCIAL produced — either as Hermes' MEDIA: tag or
+# as a bare path, which is what the agent does when it calls
+# scripts/generate-image.sh. Printing that path to a browser is useless: the
+# file lives on the VPS. Turn any such mention into a URL the page can render
+# and the owner can download, and strip the raw path from the text.
+_MEDIA_TAG = re.compile(r"MEDIA:\s*(\S+)")
+_BARE_PATH = re.compile(r"(?:/[\w.\-]+)*/(?:generated|uploads)/([A-Za-z0-9._-]+)")
+
+
+def _extract_attachments(text: str) -> tuple[str, list[dict]]:
+    found: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> bool:
+        path = _resolve_servable(name)
+        if path is None or name in seen:
+            return False
+        seen.add(name)
+        found.append({
+            "name": name,
+            "url": f"/api/file/{name}",
+            "download_url": f"/api/file/{name}?download=1",
+            "kind": _kind_for(path.suffix.lower()),
+        })
+        return True
+
+    for raw in _MEDIA_TAG.findall(text):
+        _add(Path(raw).name)
+    for name in _BARE_PATH.findall(text):
+        _add(name)
+
+    cleaned = _MEDIA_TAG.sub("", text)
+    cleaned = _BARE_PATH.sub("", cleaned)
+    # Tidy the wording left behind once the path is gone.
+    cleaned = re.sub(r"[：:]\s*$", "", cleaned.strip(), flags=re.M)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if found and not cleaned:
+        cleaned = "画像を作成しました。"
+    return cleaned, found
 
 
 # --------------------------------------------------------------------------
@@ -662,6 +751,97 @@ async def speak(request: Request) -> Response:
 # --------------------------------------------------------------------------
 # Status + static SPA
 # --------------------------------------------------------------------------
+
+# A configured key is not a working one. The account ran out of credit on
+# 2026-08-30 and every feature stopped, while a key-presence check still
+# reported "connected" — exactly the wrong thing to show someone wondering
+# why nothing answers. So probe a real billed call, and cache it: this runs
+# on every CONNECTIONS view and must not add cost or latency of its own.
+_OPENAI_HEALTH: dict[str, object] = {"at": 0.0, "ok": False, "detail": ""}
+_OPENAI_HEALTH_TTL = 300
+
+
+async def _openai_health() -> tuple[bool, str]:
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key:
+        return False, "未設定"
+
+    if time.time() - float(_OPENAI_HEALTH["at"]) < _OPENAI_HEALTH_TTL:
+        return bool(_OPENAI_HEALTH["ok"]), str(_OPENAI_HEALTH["detail"])
+
+    import httpx
+    ok, detail = False, "確認できませんでした"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": os.environ.get("SOCIAL_HEALTH_MODEL", "gpt-5-nano"),
+                      "messages": [{"role": "user", "content": "."}],
+                      "max_completion_tokens": 1},
+            )
+        if r.status_code == 200:
+            ok, detail = True, "GPT / 音声 / 画像"
+        else:
+            code = (r.json().get("error") or {}).get("code", "")
+            detail = {
+                "credit_balance_exhausted":
+                    "⚠ 残高切れです。チャージが必要です",
+                "insufficient_quota":
+                    "⚠ 利用枠を使い切っています",
+                "invalid_api_key": "⚠ APIキーが無効です",
+                "rate_limit_exceeded": "一時的に混雑しています",
+            }.get(code, f"⚠ 利用できません（{code or r.status_code}）")
+    except Exception:
+        detail = "接続を確認できませんでした"
+
+    _OPENAI_HEALTH.update({"at": time.time(), "ok": ok, "detail": detail})
+    return ok, detail
+
+
+@app.get("/api/connections")
+async def connections() -> JSONResponse:
+    """What SOCIAL is wired up to, for the CONNECTIONS screen.
+
+    Reports only whether each integration is configured — never a key, an id,
+    or a token. Designed to grow as integrations are added.
+    """
+    token_file = HERMES_HOME / "google_token.json"
+    google_ok = token_file.exists()
+    google_detail = ""
+    if google_ok:
+        try:
+            scopes = json.loads(token_file.read_text()).get("scopes") or []
+            google_detail = (
+                "スプレッドシートの閲覧のみ"
+                if any(s.endswith("spreadsheets.readonly") for s in scopes)
+                else f"{len(scopes)}件の権限"
+            )
+        except Exception:
+            google_detail = "設定済み"
+
+    openai_ok, openai_detail = await _openai_health()
+
+    items = [
+        {"id": "openai", "name": "OpenAI", "label": "会話・音声・画像生成",
+         "connected": openai_ok, "detail": openai_detail},
+        {"id": "line", "name": "LINE", "label": "スマートフォンからの会話",
+         "connected": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+                           and os.environ.get("LINE_OWNER_USER_ID")),
+         "detail": "オーナー専用（他の人は利用できません）"},
+        {"id": "google_sheets", "name": "Google スプレッドシート",
+         "label": "表の読み取り・要約",
+         "connected": google_ok, "detail": google_detail or "未接続"},
+        {"id": "web", "name": "Web検索", "label": "最新情報の取得",
+         "connected": True, "detail": "追加の契約なしで利用中"},
+        {"id": "market", "name": "株価・市場データ", "label": "指数・銘柄の取得",
+         "connected": True, "detail": "Yahoo Finance（読み取りのみ）"},
+        {"id": "brief", "name": "デイリーブリーフ", "label": "平日朝8:00の自動配信",
+         "connected": bool(os.environ.get("LINE_OWNER_USER_ID")),
+         "detail": "LINEと専用画面に配信"},
+    ]
+    return JSONResponse({"items": items})
+
 
 @app.get("/api/status")
 async def status() -> JSONResponse:

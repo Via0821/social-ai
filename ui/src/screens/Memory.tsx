@@ -39,19 +39,19 @@ export default function Memory() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-8 sm:px-8">
+    <div className="h-full overflow-y-auto px-5 pb-28 pt-6">
       <div className="mx-auto max-w-3xl">
         <h1 className="text-2xl font-bold">記憶</h1>
-        <p className="mt-2 text-slate-600">
+        <p className="mt-2" style={{ color: "var(--text-dim)" }}>
           SOCIALが長く覚えている内容です。会話の中で「これ覚えて」と伝えると増えます。
         </p>
 
         {loading ? (
-          <p className="mt-8 text-slate-500">読み込んでいます…</p>
+          <p className="mt-8" style={{ color: "var(--text-dim)" }}>読み込んでいます…</p>
         ) : items.length === 0 ? (
           <div className="card mt-8 p-8 text-center">
-            <p className="text-slate-600">まだ記憶はありません。</p>
-            <p className="mt-2 text-sm text-slate-500">
+            <p style={{ color: "var(--text-dim)" }}>まだ記憶はありません。</p>
+            <p className="mt-2 text-sm" style={{ color: "var(--text-dim)" }}>
               会話画面で「これ覚えて。〇〇です。」と伝えてみてください。
             </p>
           </div>
@@ -62,7 +62,7 @@ export default function Memory() {
             return (
               <section key={g.store} className="mt-8">
                 <h2 className="font-semibold">{g.title}</h2>
-                <p className="mt-1 text-sm text-slate-500">{g.blurb}</p>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-dim)" }}>{g.blurb}</p>
                 <ul className="mt-3 flex flex-col gap-3">
                   {group.map((item) => (
                     <li key={item.id} className="card flex items-start gap-4 p-5">
@@ -101,7 +101,7 @@ export default function Memory() {
           })
         )}
 
-        <p className="mt-8 rounded-xl bg-slate-100 p-4 text-sm text-slate-600">
+        <p className="mt-8 rounded-2xl bg-white/5 p-4 text-sm" style={{ color: "var(--text-dim)" }}>
           パスワードやAPIキーなどの認証情報は、ここには保存されません。
         </p>
       </div>
