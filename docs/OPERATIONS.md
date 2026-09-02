@@ -71,9 +71,25 @@ owner allowlist) and `LINE_HOME_CHANNEL` (the Daily Brief push target), and
 it pins `LINE_HOST=127.0.0.1` so the webhook stays behind the tunnel. It
 prints key names only, never values.
 
-## 24/7 service
+## 24/7 services
 
-Installed as a **systemd user service**:
+Three **systemd user services**, all `Restart=always`, all enabled at boot,
+with linger on so they survive logout:
+
+| Unit | Role |
+|---|---|
+| `hermes-gateway` | agent, LINE intake, cron |
+| `social-ui` | the owner's UI on 9200 |
+| `social-tunnel` | Cloudflare tunnel |
+
+`social-ui` was added on 2026-09-02 after the UI went down and stayed down:
+it was the only component started by hand, so nothing brought it back. Use
+`systemctl --user start social-ui` rather than `scripts/start-ui.sh`, which
+is now only for foreground debugging.
+
+Install it with `./scripts/install-ui-service.sh`.
+
+Day-to-day commands live in [RUNBOOK.md](RUNBOOK.md).
 
 ```
 ~/.config/systemd/user/hermes-gateway.service

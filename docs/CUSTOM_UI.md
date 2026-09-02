@@ -258,8 +258,40 @@ The service worker **deliberately does not cache API responses**. SOCIAL's
 value is current information; a cached brief or a stale memory list would be
 worse than showing nothing. Only the app shell is cached.
 
-Icons are generated into `ui/public/` (192px and 512px, plus a maskable
-variant). Regenerate them from `ui/public/icon.svg` if the mark changes.
+### Icons
+
+The artwork is **the client's own image**, used as supplied rather than
+recreated — an earlier hand-drawn SVG approximation was close but visibly not
+theirs. Master kept at `config/brand/icon-source.png` (outside `public/`, so
+the 1 MB original is never served); the shipped sizes are cut from it:
+
+```bash
+FF=tools/ffmpeg-7.0.2-amd64-static/ffmpeg
+SRC=config/brand/icon-source.png
+for s in 192 512; do
+  "$FF" -y -i "$SRC" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=$s:$s:flags=lanczos" \
+    -frames:v 1 "ui/public/icon-$s.png"
+done
+```
+
+**The maskable variant is a separate file, not the same one reused.** Android
+crops maskable icons to a circle and keeps roughly the inner 80%; the sphere
+runs to the edge of the frame, so reusing `icon-512.png` shaves its rim off.
+`icon-maskable-512.png` scales the sphere to 410px inside a 512px canvas
+padded with the artwork's own background:
+
+```bash
+"$FF" -y -i "$SRC" -vf \
+  "crop='min(iw,ih)':'min(iw,ih)',scale=410:410:flags=lanczos,pad=512:512:51:51:color=0x04070f" \
+  -frames:v 1 ui/public/icon-maskable-512.png
+```
+
+The header mark reuses `icon-192.png`, so the app and its home-screen icon
+are visibly the same thing.
+
+**Bump `SHELL_CACHE` in `sw.js` whenever an icon changes** — it is cached by
+the service worker, and a stale cache keeps serving the old one after an
+install.
 
 ## Access
 

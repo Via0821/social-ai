@@ -776,14 +776,25 @@ async def _openai_health() -> tuple[bool, str]:
             r = await client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
+                # 16, not 1: reasoning models spend tokens thinking before
+                # they emit anything, so a cap of 1 returns 400 "output limit
+                # reached" on a perfectly healthy account.
                 json={"model": os.environ.get("SOCIAL_HEALTH_MODEL", "gpt-5-nano"),
                       "messages": [{"role": "user", "content": "."}],
-                      "max_completion_tokens": 1},
+                      "max_completion_tokens": 16},
             )
+        body = r.json() if r.content else {}
+        error = body.get("error") or {}
+        message = str(error.get("message") or "")
+
         if r.status_code == 200:
             ok, detail = True, "GPT / 音声 / 画像"
+        elif "max_tokens" in message or "output limit" in message:
+            # The request was authorised and billed — it only ran out of room
+            # to answer. That is proof of health, not a failure.
+            ok, detail = True, "GPT / 音声 / 画像"
         else:
-            code = (r.json().get("error") or {}).get("code", "")
+            code = error.get("code", "")
             detail = {
                 "credit_balance_exhausted":
                     "⚠ 残高切れです。チャージが必要です",
@@ -792,6 +803,7 @@ async def _openai_health() -> tuple[bool, str]:
                 "invalid_api_key": "⚠ APIキーが無効です",
                 "rate_limit_exceeded": "一時的に混雑しています",
             }.get(code, f"⚠ 利用できません（{code or r.status_code}）")
+            _ = message  # kept for the branch above
     except Exception:
         detail = "接続を確認できませんでした"
 

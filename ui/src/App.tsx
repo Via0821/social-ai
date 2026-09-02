@@ -98,17 +98,15 @@ export default function App() {
 }
 
 function Mark() {
+  // The client's own artwork, same file the home-screen icon is cut from.
   return (
-    <span className="relative grid h-9 w-9 shrink-0 place-items-center" aria-hidden>
-      <span
-        className="absolute inset-0 rounded-full"
-        style={{ background: "radial-gradient(circle at 35% 30%, #7db9ff, #0a1836 70%)" }}
-      />
-      <span
-        className="absolute inset-0 rounded-full"
-        style={{ boxShadow: "0 0 14px rgba(47,128,255,.7)" }}
-      />
-    </span>
+    <img
+      src="/icon-192.png"
+      alt=""
+      aria-hidden
+      className="h-9 w-9 shrink-0 rounded-full"
+      style={{ boxShadow: "0 0 14px rgba(47,128,255,.55)" }}
+    />
   );
 }
 
