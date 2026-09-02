@@ -7,7 +7,8 @@
  * and layout appear instantly and the app boots offline far enough to say it
  * has no connection.
  */
-const SHELL_CACHE = "social-shell-v1";
+// Bumped when the icon changed — a stale cache would keep serving the old one.
+const SHELL_CACHE = "social-shell-v2";
 const SHELL = ["/", "/index.html", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
