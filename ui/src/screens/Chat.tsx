@@ -1,38 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Attachment } from "../lib/api";
-import { loadHistory, saveHistory, clearHistory, type Msg } from "../lib/history";
-
-/**
- * A fast path for obvious image requests — it skips an agent round-trip.
- * Only an optimisation: when it misses, the agent generates the image itself
- * and the server turns the resulting path into a rendered attachment, so the
- * outcome is the same either way.
- */
-const IMAGE_INTENT =
-  /(画像|イメージ|イラスト|絵|写真|図|图)\s*(を)?\s*(作|生成|描|つく|書|出)|image of|draw me|generate an image/i;
+import { type Msg } from "../lib/history";
+import * as chat from "../lib/chatStore";
+import { useChat } from "../lib/useChat";
 
 export default function Chat() {
-  const [messages, setMessages] = useState<Msg[]>(loadHistory);
+  const { messages, busy, elapsed } = useChat();
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Attachment | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const runIdRef = useRef<string>("");
-
-  // Persist on every change, so navigating away and back keeps the thread.
-  useEffect(() => { saveHistory(messages); }, [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
-
-  function push(msg: Msg) {
-    setMessages((m) => [...m, { ...msg, at: Date.now() }]);
-  }
 
   async function send(text: string) {
     const trimmed = text.trim();
@@ -43,9 +26,9 @@ export default function Chat() {
     // friendly filename for display only.
     const outgoing = attachment
       ? `${trimmed || "このファイルの内容を教えて。"}\n\n[添付ファイル: ${attachment.path}]`
-      : trimmed;
+      : undefined;
 
-    push({
+    chat.append({
       role: "user",
       text: trimmed || `（${attachment?.name} を送信）`,
       attachment: attachment
@@ -60,49 +43,14 @@ export default function Chat() {
     });
     setInput("");
     setPending(null);
-    setBusy(true);
-    setElapsed(0);
 
-    // Image requests go straight to the image endpoint — routing them
-    // through the agent just produces a description of a picture.
-    if (!attachment && IMAGE_INTENT.test(trimmed)) {
-      try {
-        const url = await api.generateImage(trimmed);
-        const name = url.split("/").pop() ?? "image.png";
-        push({
-          role: "social",
-          text: "画像を作成しました。",
-          files: [{
-            name,
-            url,
-            download_url: `/api/file/${name}?download=1`,
-            kind: "image",
-          }],
-        });
-      } catch {
-        push({ role: "social", text: "画像を生成できませんでした。", error: true });
-      }
-      setBusy(false);
-      return;
-    }
-
-    const runId = crypto.randomUUID();
-    runIdRef.current = runId;
-
-    await api.sendMessage(outgoing, {
-      onProgress: setElapsed,
-      onMessage: (t, files) => push({ role: "social", text: t, files }),
-      onError: (msg) => push({ role: "social", text: msg, error: true }),
-    }, runId);
-
-    setBusy(false);
+    // Not awaited on purpose: the turn belongs to the store, so leaving this
+    // screen mid-answer no longer throws the reply away.
+    void chat.send(trimmed || "このファイルの内容を教えて。", { outgoing });
   }
 
   async function stop() {
-    if (!runIdRef.current) return;
-    await api.stopMessage(runIdRef.current);
-    setBusy(false);
-    push({ role: "social", text: "（停止しました）" });
+    await chat.stop();
   }
 
   async function pickFile(file: File) {
@@ -130,8 +78,7 @@ export default function Chat() {
           <button
             onClick={() => {
               if (confirm("この画面の会話履歴を消します。SOCIALの記憶は消えません。")) {
-                clearHistory();
-                setMessages([]);
+                chat.clearAll();
               }
             }}
             className="text-sm" style={{ color: "var(--text-dim)" }}

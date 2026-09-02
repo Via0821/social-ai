@@ -3,7 +3,8 @@ import Orb, { type OrbState } from "../components/Orb";
 import { api } from "../lib/api";
 import { isRecordingSupported, pickMimeType } from "../lib/recorder";
 import { startVoiceLoop, type VoiceLoop } from "../lib/voiceLoop";
-import { loadHistory, saveHistory, type Msg } from "../lib/history";
+import * as chat from "../lib/chatStore";
+import { useChat } from "../lib/useChat";
 
 const LABEL: Record<OrbState, string> = {
   idle: "タップして会話をはじめる",
@@ -16,7 +17,7 @@ export default function Talk() {
   const [state, setState] = useState<OrbState>("idle");
   const [level, setLevel] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Msg[]>(loadHistory);
+  const { messages } = useChat();
   const [showChat, setShowChat] = useState(true);
 
   const loopRef = useRef<VoiceLoop | null>(null);
@@ -25,7 +26,6 @@ export default function Talk() {
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => teardown(), []);
-  useEffect(() => { saveHistory(messages); }, [messages]);
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, state]);
@@ -36,10 +36,6 @@ export default function Talk() {
     loopRef.current = null;
     audioRef.current?.pause();
     audioRef.current = null;
-  }
-
-  function push(msg: Msg) {
-    setMessages((m) => [...m, { ...msg, at: Date.now() }]);
   }
 
   async function begin() {
@@ -87,19 +83,15 @@ export default function Talk() {
         await resumeListening();
         return;
       }
-      push({ role: "user", text: said });
+      chat.append({ role: "user", text: said });
 
-      let answer = "";
-      await api.sendMessage(said, {
-        onMessage: (t, files) => {
-          answer = t;
-          push({ role: "social", text: t, files });
-        },
-        onError: (m) => {
-          setError(m);
-          push({ role: "social", text: m, error: true });
-        },
-      });
+      // Voice turns never take the image fast-path — the owner asked a
+      // question aloud and expects an answer aloud.
+      const before = chat.getMessages().length;
+      await chat.send(said, { noImageIntent: true });
+      const produced = chat.getMessages().slice(before);
+      const answer = produced.filter((m) => m.role === "social" && !m.error)
+                             .map((m) => m.text).join("\n");
       if (!liveRef.current) return;
       if (!answer) {
         await resumeListening();

@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
-import { loadHistory, saveHistory, clearHistory, type Msg } from "../lib/history";
+import { type Msg } from "../lib/history";
+import * as chat from "../lib/chatStore";
+import { useChat } from "../lib/useChat";
 
 /** Group the transcript into days — the owner asked for per-day at minimum. */
 function byDay(messages: Msg[]): { day: string; items: Msg[] }[] {
@@ -26,7 +28,9 @@ function label(day: string): string {
 }
 
 export default function History() {
-  const [messages, setMessages] = useState<Msg[]>(loadHistory);
+  // Subscribed, not snapshotted: a reply that lands while this screen is
+  // open shows up without navigating away and back.
+  const { messages } = useChat();
   const [open, setOpen] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -49,16 +53,14 @@ export default function History() {
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       return !selected.has(key);
     });
-    setMessages(keep);
-    saveHistory(keep);
+    chat.replaceAll(keep);
     setSelected(new Set());
     setPicking(false);
   }
 
   function removeAll() {
     if (!confirm("すべての会話履歴を消します。SOCIALの記憶は消えません。")) return;
-    clearHistory();
-    setMessages([]);
+    chat.clearAll();
     setSelected(new Set());
     setPicking(false);
   }

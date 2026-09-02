@@ -139,6 +139,37 @@ Verified: unauthenticated page → 303 to `/login`; unauthenticated API → 401;
 wrong passphrase → 401 after a 1s delay; correct → cookie set, 30-day expiry;
 tampered cookie → 401.
 
+## The conversation lives outside React
+
+Each screen used to hold the transcript in its own `useState`. Send a message,
+switch tabs before the answer lands, and the screen unmounts — so when the
+reply finally arrived, `setState` hit a dead component. The answer was
+**discarded and never persisted**. The owner reported it as "history is not
+reflected immediately"; the reply had genuinely been thrown away.
+
+`lib/chatStore.ts` holds the messages and the in-flight run at module scope,
+so a turn completes and saves regardless of what is mounted. Screens
+subscribe through `useSyncExternalStore` (`lib/useChat.ts`) and no longer own
+the data — CHAT, TALK and HISTORY all read the same array, so a reply arriving
+while HISTORY is open appears there without navigating away and back.
+
+`send()` is deliberately **not awaited** by the caller, for the same reason.
+
+Verified by stubbing `localStorage` and `fetch` and running a turn with **zero
+subscribers** — the state a fully unmounted UI is in. The reply still lands in
+storage.
+
+### Day grouping
+
+HISTORY groups by the **viewer's local calendar date**, with the boundary at
+local midnight — so a phone in Japan splits days at JST midnight regardless of
+the server's timezone. Entries carry `at` (epoch ms) set when the message is
+appended.
+
+Threads were considered and deferred: the owner asked for per-day as the
+acceptable minimum, and Hermes' own session grouping does not line up with
+what the UI shows.
+
 ## Files SOCIAL produces
 
 A reply may name a file on the server — Hermes' `MEDIA:<path>` tag, or a bare
