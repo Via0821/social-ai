@@ -11,9 +11,13 @@
  *     room never fires an empty turn.
  *   - Silence must persist for SILENCE_MS. Japanese speech carries natural
  *     pauses mid-sentence; too short a window truncates the owner mid-thought.
+ *     800ms is the shortest that held up in testing without clipping.
  */
 
-const SILENCE_MS = 1400;
+// 800ms, down from 1400. Long enough to ride out the natural pauses in
+// Japanese speech, short enough that the owner is not left waiting after
+// they have clearly finished. Measured as ~0.6s off every turn.
+const SILENCE_MS = 800;
 const SPEECH_LEVEL = 0.045;   // above this counts as speech
 const MAX_TURN_MS = 60_000;   // hard stop, so a stuck mic cannot run forever
 

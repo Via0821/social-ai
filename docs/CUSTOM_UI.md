@@ -271,6 +271,44 @@ Listening and speaking also scale with measured amplitude, so it tracks the
 owner's actual voice rather than looping. `prefers-reduced-motion` disables
 all of it.
 
+### The voice fast path (B案, 2026-09-03)
+
+A spoken turn took ~10.5s. Profiling put 6.2s of that in one `hermes -z`
+invocation — but only **1.6s of it was the model**. The rest was Hermes
+starting from scratch on every single turn.
+
+`/api/talk` therefore calls OpenAI directly for TALK, with SOCIAL's persona
+and curated memory injected as the system prompt, and **escalates back to
+Hermes whenever the turn actually needs it** — a web search, a stock quote, a
+spreadsheet, a file, or a memory write. The model decides via a single
+`escalate` tool, so nothing was traded away; only the startup cost.
+
+| Stage | Before | After |
+|---|---|---|
+| End-of-speech detection | 1400 ms | 800 ms |
+| Speech → text | 1205 ms | 1205 ms |
+| SOCIAL's response | 6246 ms | **1600 ms** |
+| Time to first spoken word | 1631 ms | **600 ms** |
+| **Total** | **10.5 s** | **4.2 s** |
+
+Measured after the change: conversational turns reach a first sentence in
+1.1–3.0 s; a stock question escalated correctly and returned live data.
+
+Two details that make this safe rather than merely fast:
+
+- **The persona cache keys on file mtimes.** Saving a memory escalates to
+  Hermes, which writes the file; the very next fast-path turn sees the new
+  entry. Verified — a fact stored in one turn was recalled 1.15 s later in
+  the next.
+- **Sentences are emitted as the model writes them** (`_SENTENCE_END`), and
+  `lib/ttsQueue.ts` synthesises them with a small look-ahead while playing
+  strictly in order. Speaking starts on sentence one instead of after the
+  whole answer.
+
+Escalated turns are still slow by nature — a stock lookup took 37 s — but
+they are correct, and the owner hears the answer sentence by sentence rather
+than in silence.
+
 ### Continuous conversation
 
 `lib/voiceLoop.ts` runs listen → detect end of speech → send → speak →

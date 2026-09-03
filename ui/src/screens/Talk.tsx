@@ -3,7 +3,8 @@ import Orb, { type OrbState } from "../components/Orb";
 import { api } from "../lib/api";
 import { isRecordingSupported, pickMimeType } from "../lib/recorder";
 import { startVoiceLoop, type VoiceLoop } from "../lib/voiceLoop";
-import { speak, stopSpeaking, unlockAudio } from "../lib/audioOut";
+import { stopSpeaking, unlockAudio } from "../lib/audioOut";
+import { createTtsQueue, type TtsQueue } from "../lib/ttsQueue";
 import * as chat from "../lib/chatStore";
 import { useChat } from "../lib/useChat";
 
@@ -22,6 +23,7 @@ export default function Talk() {
   const [showChat, setShowChat] = useState(true);
 
   const loopRef = useRef<VoiceLoop | null>(null);
+  const ttsRef = useRef<TtsQueue | null>(null);
   const liveRef = useRef(false);
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -34,6 +36,8 @@ export default function Talk() {
     liveRef.current = false;
     loopRef.current?.stop();
     loopRef.current = null;
+    ttsRef.current?.cancel();
+    ttsRef.current = null;
     stopSpeaking();
   }
 
@@ -87,35 +91,35 @@ export default function Talk() {
       }
       chat.append({ role: "user", text: said });
 
-      // Voice turns never take the image fast-path — the owner asked a
-      // question aloud and expects an answer aloud.
-      const before = chat.getMessages().length;
-      await chat.send(said, { noImageIntent: true });
-      const produced = chat.getMessages().slice(before);
-      const answer = produced.filter((m) => m.role === "social" && !m.error)
-                             .map((m) => m.text).join("\n");
-      if (!liveRef.current) return;
-      if (!answer) {
-        await resumeListening();
-        return;
-      }
+      // Speak each sentence as it arrives rather than waiting for the whole
+      // answer — this is what removes the last second of dead air.
+      const queue = createTtsQueue(setError);
+      ttsRef.current = queue;
+      let spoke = false;
 
-      setState("speaking");
-      // Reopening the mic is the hand-back that makes this a conversation,
-      // so it must happen however playback ends — including when it fails.
-      const result = await speak(
-        await api.speak(answer),
-        () => void resumeListening(),
-      );
-      if (result === "blocked") {
-        setError(
-          "ブラウザが音声の再生をブロックしました。もう一度タップして会話を開始してください。",
-        );
-      } else if (result === "failed") {
-        setError("音声を再生できませんでした。文字では上に表示されています。");
-      }
+      await api.talk(said, {
+        onSentence: (sentence) => {
+          if (!liveRef.current) return;
+          if (!spoke) { spoke = true; setState("speaking"); }
+          queue.push(sentence);
+        },
+        onEscalating: () => setState("thinking"),
+        onMessage: (text, files) => {
+          if (text) chat.append({ role: "social", text, files });
+        },
+        onError: (m) => {
+          setError(m);
+          chat.append({ role: "social", text: m, error: true });
+        },
+      });
+
+      await queue.finish();
+      ttsRef.current = null;
+      await resumeListening();
     } catch {
       setError("音声のやり取りに失敗しました。");
+      ttsRef.current?.cancel();
+      ttsRef.current = null;
       await resumeListening();
     }
   }
