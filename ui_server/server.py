@@ -115,9 +115,28 @@ def _auth_required() -> bool:
     return bool(_password())
 
 
+# Fetched by the OS, not the page, and therefore WITHOUT the session cookie:
+# iOS asks for apple-touch-icon and the manifest's icons on its own when the
+# site is added to the home screen. Behind auth they answered 303 to the login
+# HTML, which iOS cannot read as an image — so it fell back to generating a
+# letter tile, and the owner got a black square with "S" instead of the mark.
+#
+# These are fixed branding files and the service worker. They carry nothing
+# private. User content stays behind auth: /api/file/* is deliberately absent.
+PUBLIC_PATHS = frozenset({
+    "/login",
+    "/manifest.webmanifest",
+    "/sw.js",
+    "/icon-192.png",
+    "/icon-512.png",
+    "/icon-maskable-512.png",
+    "/apple-touch-icon.png",
+})
+
+
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
-    if not _auth_required() or request.url.path in {"/login", "/manifest.webmanifest"}:
+    if not _auth_required() or request.url.path in PUBLIC_PATHS:
         return await call_next(request)
 
     if _token_valid(request.cookies.get(COOKIE_NAME, "")):

@@ -3,6 +3,7 @@ import Orb, { type OrbState } from "../components/Orb";
 import { api } from "../lib/api";
 import { isRecordingSupported, pickMimeType } from "../lib/recorder";
 import { startVoiceLoop, type VoiceLoop } from "../lib/voiceLoop";
+import { speak, stopSpeaking, unlockAudio } from "../lib/audioOut";
 import * as chat from "../lib/chatStore";
 import { useChat } from "../lib/useChat";
 
@@ -21,7 +22,6 @@ export default function Talk() {
   const [showChat, setShowChat] = useState(true);
 
   const loopRef = useRef<VoiceLoop | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const liveRef = useRef(false);
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -34,12 +34,14 @@ export default function Talk() {
     liveRef.current = false;
     loopRef.current?.stop();
     loopRef.current = null;
-    audioRef.current?.pause();
-    audioRef.current = null;
+    stopSpeaking();
   }
 
   async function begin() {
     setError(null);
+    // Must run inside the tap handler, before any await, or Safari refuses
+    // to play SOCIAL's replies later on.
+    unlockAudio();
     if (!isRecordingSupported()) {
       setError("このブラウザは音声入力に対応していません。SafariかChromeの最新版でお試しください。");
       return;
@@ -99,13 +101,19 @@ export default function Talk() {
       }
 
       setState("speaking");
-      const audioEl = new Audio(URL.createObjectURL(await api.speak(answer)));
-      audioRef.current = audioEl;
-      // Reopen the mic the moment SOCIAL stops talking — that hand-back is
-      // what makes it a conversation rather than a sequence of commands.
-      audioEl.onended = () => void resumeListening();
-      audioEl.onerror = () => void resumeListening();
-      await audioEl.play();
+      // Reopening the mic is the hand-back that makes this a conversation,
+      // so it must happen however playback ends — including when it fails.
+      const result = await speak(
+        await api.speak(answer),
+        () => void resumeListening(),
+      );
+      if (result === "blocked") {
+        setError(
+          "ブラウザが音声の再生をブロックしました。もう一度タップして会話を開始してください。",
+        );
+      } else if (result === "failed") {
+        setError("音声を再生できませんでした。文字では上に表示されています。");
+      }
     } catch {
       setError("音声のやり取りに失敗しました。");
       await resumeListening();

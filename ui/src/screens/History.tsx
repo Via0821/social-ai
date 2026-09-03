@@ -1,30 +1,53 @@
 import { useMemo, useState } from "react";
-import { type Msg } from "../lib/history";
+import { dayKey, isUndated, type Msg } from "../lib/history";
 import * as chat from "../lib/chatStore";
 import { useChat } from "../lib/useChat";
 
-/** Group the transcript into days — the owner asked for per-day at minimum. */
+const UNDATED = "__undated__";
+
+/**
+ * Group the transcript by local calendar day.
+ *
+ * Messages saved before timestamping exist and cannot be dated after the
+ * fact, so they get their own bucket instead of being folded into today —
+ * which is what made every conversation look like it happened this morning.
+ */
 function byDay(messages: Msg[]): { day: string; items: Msg[] }[] {
   const groups = new Map<string, Msg[]>();
   for (const m of messages) {
-    const d = new Date(m.at ?? Date.now());
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    (groups.get(key) ?? groups.set(key, []).get(key)!).push(m);
+    const key = isUndated(m) ? UNDATED : dayKey(m.at as number);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(m);
+    else groups.set(key, [m]);
   }
   return [...groups.entries()]
-    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    // Newest day first; the undated bucket always sinks to the bottom.
+    .sort((a, b) => {
+      if (a[0] === UNDATED) return 1;
+      if (b[0] === UNDATED) return -1;
+      return a[0] < b[0] ? 1 : -1;
+    })
     .map(([day, items]) => ({ day, items }));
 }
 
 function label(day: string): string {
-  const today = new Date();
+  if (day === UNDATED) return "以前の会話";
+
+  const p = (n: number) => String(n).padStart(2, "0");
   const iso = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+
+  const today = new Date();
   if (day === iso(today)) return "今日";
-  const y = new Date(today); y.setDate(y.getDate() - 1);
+  const y = new Date(today);
+  y.setDate(y.getDate() - 1);
   if (day === iso(y)) return "昨日";
-  const [, mm, dd] = day.split("-");
-  return `${Number(mm)}月${Number(dd)}日`;
+
+  const [yy, mm, dd] = day.split("-");
+  const sameYear = yy === String(today.getFullYear());
+  return sameYear
+    ? `${Number(mm)}月${Number(dd)}日`
+    : `${yy}年${Number(mm)}月${Number(dd)}日`;
 }
 
 export default function History() {
@@ -48,11 +71,9 @@ export default function History() {
   function removeSelected() {
     if (!selected.size) return;
     if (!confirm(`選択した${selected.size}日分の履歴を消します。SOCIALの記憶は消えません。`)) return;
-    const keep = messages.filter((m) => {
-      const d = new Date(m.at ?? Date.now());
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      return !selected.has(key);
-    });
+    const keep = messages.filter(
+      (m) => !selected.has(isUndated(m) ? UNDATED : dayKey(m.at as number)),
+    );
     chat.replaceAll(keep);
     setSelected(new Set());
     setPicking(false);
@@ -148,6 +169,15 @@ export default function History() {
                             : "self-start bg-white/5"
                         }`}
                       >
+                        {!isUndated(m) && (
+                          <span
+                            className="mb-1 block text-[11px] opacity-60"
+                          >
+                            {new Date(m.at as number).toLocaleTimeString("ja-JP", {
+                              hour: "2-digit", minute: "2-digit",
+                            })}
+                          </span>
+                        )}
                         {m.text}
                         {m.files?.map((f) => (
                           <a

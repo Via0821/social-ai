@@ -161,14 +161,39 @@ storage.
 
 ### Day grouping
 
-HISTORY groups by the **viewer's local calendar date**, with the boundary at
-local midnight — so a phone in Japan splits days at JST midnight regardless of
-the server's timezone. Entries carry `at` (epoch ms) set when the message is
-appended.
+HISTORY groups by the **viewer's local calendar date**, boundary at local
+midnight — so a phone in Japan splits days at JST midnight regardless of the
+server's timezone. Entries carry `at` (epoch ms), set when appended.
+
+**Messages saved before timestamping must not be dated as "now".** The first
+version wrote `new Date(m.at ?? Date.now())`, which stamped undated messages
+at *render* time — so every old conversation collapsed into today and the
+grouping looked broken. Their real time is gone and cannot be recovered, so
+`isUndated()` routes them to a separate 以前の会話 bucket, sorted last. Dated
+messages also show a time, so ordering within a day is visible.
 
 Threads were considered and deferred: the owner asked for per-day as the
 acceptable minimum, and Hermes' own session grouping does not line up with
 what the UI shows.
+
+## Safari will not play a reply unless the element was unlocked by a tap
+
+TALK transcribed the owner correctly and answered in text, but stayed silent.
+Not a TTS fault — the audio was generated fine. Browsers only allow `play()`
+inside a user gesture, and in TALK every reply plays from deep inside an async
+chain (record → transcribe → ask → speak), by which point the gesture context
+from the initial tap is long gone. Safari refuses, and the rejection is easy
+to swallow.
+
+`lib/audioOut.ts` keeps **one** `Audio` element, unlocked synchronously inside
+the tap handler in `begin()` — before any `await` — by playing 50 ms of
+silence. An element unlocked by a gesture stays unlocked, so every later reply
+reuses it.
+
+Playback failure now reports which kind it was: `NotAllowedError` is the
+autoplay block specifically and tells the owner to tap again, anything else is
+a genuine playback failure. Either way the mic reopens, so a silent reply
+never strands the conversation.
 
 ## Files SOCIAL produces
 
@@ -319,6 +344,31 @@ padded with the artwork's own background:
 
 The header mark reuses `icon-192.png`, so the app and its home-screen icon
 are visibly the same thing.
+
+### Icons must be reachable without the session cookie
+
+The home-screen icon came out as a black tile with a white "S" — an icon
+nobody had designed. iOS was generating a letter fallback because it could
+not load ours.
+
+Cause: `apple-touch-icon` and the manifest's icons are fetched **by the OS,
+not the page**, and therefore without the session cookie. The auth middleware
+answered `303` to the login HTML, iOS could not read that as an image, and
+fell back to a generated tile. The manifest itself was exempt; the icons it
+pointed at were not.
+
+`PUBLIC_PATHS` in `ui_server/server.py` now exempts the fixed branding files
+and the service worker. They contain nothing private. **`/api/file/*` is
+deliberately not in that set** — user content stays behind the passphrase.
+Verified after the change: icons and `sw.js` return 200 uncredentialed, while
+`/api/file/*`, `/api/memory` and `/` still refuse.
+
+iOS wants `180x180` specifically, so `apple-touch-icon.png` is shipped at
+that size alongside the 192/512 pair.
+
+**iOS caches the icon at the moment the site is added to the home screen.**
+Fixing the server does not update an icon already on someone's phone — the
+shortcut has to be deleted and re-added.
 
 **Bump `SHELL_CACHE` in `sw.js` whenever an icon changes** — it is cached by
 the service worker, and a stale cache keeps serving the old one after an
