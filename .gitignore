@@ -69,3 +69,11 @@ ui/dist/
 *oauth*.json
 client_secret*.json
 JSON-*.json
+
+# --- Never commit key material ---
+# An OpenSSH private key reached this repo as `eval "$(ssh-agent -s)"` —
+# a mistyped ssh-keygen -f. Match the shape, not just the usual names.
+id_*
+*.ppk
+eval*
+**/*OPENSSH*
