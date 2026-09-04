@@ -93,9 +93,14 @@ export type Attachment = {
   size: number;
 };
 
+export type VoiceOption = { id: string; label: string; note: string };
+export type VoiceSettings = { voices: VoiceOption[]; voice: string; speed: number };
+
 export type TalkHandlers = {
+  /** Raw fragments, for rendering text as it is generated. */
+  onDelta?: (text: string) => void;
   /** A complete sentence, ready to speak. Arrives as the model writes. */
-  onSentence: (text: string) => void;
+  onSentence?: (text: string) => void;
   /** The finished answer, for the transcript. */
   onMessage: (text: string, files?: ReplyFile[]) => void;
   /** Fired when the turn needed tools and was handed to Hermes — slower. */
@@ -138,7 +143,8 @@ export const api = {
         let payload: any;
         try { payload = JSON.parse(data.join("\n")); } catch { continue; }
 
-        if (event === "sentence") h.onSentence(payload.text ?? "");
+        if (event === "delta") h.onDelta?.(payload.text ?? "");
+        else if (event === "sentence") h.onSentence?.(payload.text ?? "");
         else if (event === "escalating") h.onEscalating?.();
         else if (event === "message") h.onMessage(payload.text ?? "", payload.attachments ?? []);
         else if (event === "error") h.onError(payload.message ?? "エラーが発生しました。");
@@ -225,6 +231,22 @@ export const api = {
     });
     if (!r.ok) throw new Error("音声を生成できませんでした。");
     return r.blob();
+  },
+
+  async getVoiceSettings(): Promise<VoiceSettings> {
+    const r = await fetch("/api/voice/settings");
+    if (!r.ok) return { voices: [], voice: "alloy", speed: 1 };
+    return r.json();
+  },
+
+  async saveVoiceSettings(voice: string, speed: number): Promise<VoiceSettings> {
+    const r = await fetch("/api/voice/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice, speed }),
+    });
+    if (!r.ok) throw new Error("設定を保存できませんでした。");
+    return r.json();
   },
 
   async getStatus(): Promise<{
