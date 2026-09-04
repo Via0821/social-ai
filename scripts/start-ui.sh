@@ -6,6 +6,34 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Hermes ships its interpreter in its own venv. How `hermes` points at it
+# differs by install: a symlink straight into venv/bin on some hosts, a small
+# wrapper script that execs it on others. Resolve both, and fall back to
+# asking hermes itself where it lives, rather than silently landing on the
+# system python — which has none of the dependencies.
+_resolve_hermes_python() {
+  local bin candidate dir
+  bin="$(command -v hermes || true)"
+  [[ -n "$bin" ]] || return 1
+
+  # (a) symlink into venv/bin
+  dir="$(dirname "$(readlink -f "$bin")")"
+  for candidate in "$dir/python3" "$dir/python"; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+
+  # (b) wrapper script naming the interpreter
+  candidate="$(grep -oE '/[^"]*/venv/bin/python[0-9.]*' "$bin" 2>/dev/null | head -1)"
+  [[ -n "$candidate" && -x "$candidate" ]] && { echo "$candidate"; return 0; }
+
+  # (c) ask hermes where it is installed
+  dir="$("$bin" --version 2>/dev/null | sed -n 's/^Install directory:[[:space:]]*//p' | head -1)"
+  for candidate in "$dir/venv/bin/python3" "$dir/venv/bin/python"; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
 HOST="${SOCIAL_UI_HOST:-127.0.0.1}"
 PORT="${SOCIAL_UI_PORT:-9200}"
 
@@ -48,11 +76,7 @@ export HERMES_HOME="$PROJECT_ROOT/.hermes"
 if [[ -n "${SOCIAL_UI_PYTHON:-}" ]]; then
   PY="$SOCIAL_UI_PYTHON"
 else
-  HERMES_PATH="$(command -v hermes || true)"
-  if [[ -n "$HERMES_PATH" ]]; then
-    PY="$(dirname "$(readlink -f "$HERMES_PATH")")/python"
-  fi
-  [[ -n "${PY:-}" && -x "$PY" ]] || PY="$(command -v python3)"
+  PY="$(_resolve_hermes_python)" || PY="$(command -v python3)"
 fi
 
 if ! "$PY" -c "import fastapi, uvicorn, httpx" 2>/dev/null; then

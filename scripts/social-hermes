@@ -39,9 +39,37 @@ fi
 #
 # Resolved from the hermes entry point rather than hard-coded, so this stays
 # correct on the production host.
-_HERMES_VENV_BIN="$(dirname "$(readlink -f "$HERMES_BIN")")"
-if [[ -x "$_HERMES_VENV_BIN/python3" ]]; then
-  export PATH="$_HERMES_VENV_BIN:$PATH"
+# Hermes ships its interpreter in its own venv. How `hermes` points at it
+# differs by install: a symlink straight into venv/bin on some hosts, a small
+# wrapper script that execs it on others. Resolve both, and fall back to
+# asking hermes itself where it lives, rather than silently landing on the
+# system python — which has none of the dependencies.
+_resolve_hermes_python() {
+  local bin candidate dir
+  bin="$(command -v hermes || true)"
+  [[ -n "$bin" ]] || return 1
+
+  # (a) symlink into venv/bin
+  dir="$(dirname "$(readlink -f "$bin")")"
+  for candidate in "$dir/python3" "$dir/python"; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+
+  # (b) wrapper script naming the interpreter
+  candidate="$(grep -oE '/[^"]*/venv/bin/python[0-9.]*' "$bin" 2>/dev/null | head -1)"
+  [[ -n "$candidate" && -x "$candidate" ]] && { echo "$candidate"; return 0; }
+
+  # (c) ask hermes where it is installed
+  dir="$("$bin" --version 2>/dev/null | sed -n 's/^Install directory:[[:space:]]*//p' | head -1)"
+  for candidate in "$dir/venv/bin/python3" "$dir/venv/bin/python"; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
+_HERMES_PY="$(_resolve_hermes_python || true)"
+if [[ -n "$_HERMES_PY" ]]; then
+  export PATH="$(dirname "$_HERMES_PY"):$PATH"
 fi
 
 exec "$HERMES_BIN" "$@"
