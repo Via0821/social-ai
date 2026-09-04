@@ -3,7 +3,10 @@ import Orb, { type OrbState } from "../components/Orb";
 import { api } from "../lib/api";
 import { isRecordingSupported, pickMimeType } from "../lib/recorder";
 import { startVoiceLoop, type VoiceLoop } from "../lib/voiceLoop";
-import { loadHistory, saveHistory, type Msg } from "../lib/history";
+import { stopSpeaking, unlockAudio } from "../lib/audioOut";
+import { createTtsQueue, type TtsQueue } from "../lib/ttsQueue";
+import * as chat from "../lib/chatStore";
+import { useChat } from "../lib/useChat";
 
 const LABEL: Record<OrbState, string> = {
   idle: "タップして会話をはじめる",
@@ -16,16 +19,15 @@ export default function Talk() {
   const [state, setState] = useState<OrbState>("idle");
   const [level, setLevel] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Msg[]>(loadHistory);
+  const { messages } = useChat();
   const [showChat, setShowChat] = useState(true);
 
   const loopRef = useRef<VoiceLoop | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsRef = useRef<TtsQueue | null>(null);
   const liveRef = useRef(false);
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => teardown(), []);
-  useEffect(() => { saveHistory(messages); }, [messages]);
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, state]);
@@ -34,16 +36,16 @@ export default function Talk() {
     liveRef.current = false;
     loopRef.current?.stop();
     loopRef.current = null;
-    audioRef.current?.pause();
-    audioRef.current = null;
-  }
-
-  function push(msg: Msg) {
-    setMessages((m) => [...m, { ...msg, at: Date.now() }]);
+    ttsRef.current?.cancel();
+    ttsRef.current = null;
+    stopSpeaking();
   }
 
   async function begin() {
     setError(null);
+    // Must run inside the tap handler, before any await, or Safari refuses
+    // to play SOCIAL's replies later on.
+    unlockAudio();
     if (!isRecordingSupported()) {
       setError("このブラウザは音声入力に対応していません。SafariかChromeの最新版でお試しください。");
       return;
@@ -87,35 +89,37 @@ export default function Talk() {
         await resumeListening();
         return;
       }
-      push({ role: "user", text: said });
+      chat.append({ role: "user", text: said });
 
-      let answer = "";
-      await api.sendMessage(said, {
-        onMessage: (t, files) => {
-          answer = t;
-          push({ role: "social", text: t, files });
+      // Speak each sentence as it arrives rather than waiting for the whole
+      // answer — this is what removes the last second of dead air.
+      const queue = createTtsQueue(setError);
+      ttsRef.current = queue;
+      let spoke = false;
+
+      await api.talk(said, {
+        onSentence: (sentence) => {
+          if (!liveRef.current) return;
+          if (!spoke) { spoke = true; setState("speaking"); }
+          queue.push(sentence);
+        },
+        onEscalating: () => setState("thinking"),
+        onMessage: (text, files) => {
+          if (text) chat.append({ role: "social", text, files });
         },
         onError: (m) => {
           setError(m);
-          push({ role: "social", text: m, error: true });
+          chat.append({ role: "social", text: m, error: true });
         },
       });
-      if (!liveRef.current) return;
-      if (!answer) {
-        await resumeListening();
-        return;
-      }
 
-      setState("speaking");
-      const audioEl = new Audio(URL.createObjectURL(await api.speak(answer)));
-      audioRef.current = audioEl;
-      // Reopen the mic the moment SOCIAL stops talking — that hand-back is
-      // what makes it a conversation rather than a sequence of commands.
-      audioEl.onended = () => void resumeListening();
-      audioEl.onerror = () => void resumeListening();
-      await audioEl.play();
+      await queue.finish();
+      ttsRef.current = null;
+      await resumeListening();
     } catch {
       setError("音声のやり取りに失敗しました。");
+      ttsRef.current?.cancel();
+      ttsRef.current = null;
       await resumeListening();
     }
   }

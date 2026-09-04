@@ -43,6 +43,26 @@ export function loadHistory(): Msg[] {
   }
 }
 
+/**
+ * True when a message predates timestamping.
+ *
+ * Such messages must NOT be treated as "now". Doing so — `new Date(m.at ??
+ * Date.now())` — dated them at render time, so every old conversation
+ * collapsed into today and the day grouping looked broken. Their real time is
+ * unknown and unrecoverable, so they are grouped separately and labelled
+ * honestly rather than given an invented date.
+ */
+export function isUndated(m: Msg): boolean {
+  return typeof m.at !== "number" || !Number.isFinite(m.at) || m.at <= 0;
+}
+
+/** Local calendar day key. The boundary is the viewer's own midnight. */
+export function dayKey(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export function saveHistory(messages: Msg[]): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(messages.slice(-MAX_MESSAGES)));

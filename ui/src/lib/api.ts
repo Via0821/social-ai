@@ -93,7 +93,59 @@ export type Attachment = {
   size: number;
 };
 
+export type TalkHandlers = {
+  /** A complete sentence, ready to speak. Arrives as the model writes. */
+  onSentence: (text: string) => void;
+  /** The finished answer, for the transcript. */
+  onMessage: (text: string, files?: ReplyFile[]) => void;
+  /** Fired when the turn needed tools and was handed to Hermes — slower. */
+  onEscalating?: () => void;
+  onError: (message: string) => void;
+};
+
 export const api = {
+  /** A spoken turn. Bypasses Hermes' startup unless tools are needed. */
+  async talk(message: string, h: TalkHandlers, runId?: string): Promise<void> {
+    const res = await fetch("/api/talk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, run_id: runId }),
+    });
+    if (!res.ok || !res.body) {
+      h.onError("サーバーに接続できませんでした。");
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        let event = "message";
+        const data: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: ")) event = line.slice(7).trim();
+          else if (line.startsWith("data: ")) data.push(line.slice(6));
+        }
+        if (!data.length) continue;
+        let payload: any;
+        try { payload = JSON.parse(data.join("\n")); } catch { continue; }
+
+        if (event === "sentence") h.onSentence(payload.text ?? "");
+        else if (event === "escalating") h.onEscalating?.();
+        else if (event === "message") h.onMessage(payload.text ?? "", payload.attachments ?? []);
+        else if (event === "error") h.onError(payload.message ?? "エラーが発生しました。");
+      }
+    }
+  },
+
   sendMessage: (
     message: string,
     h: StreamHandlers,

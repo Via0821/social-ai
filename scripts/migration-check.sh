@@ -34,7 +34,19 @@ done
 echo
 echo "3. Secrets are not tracked by git"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  leaked=$(git ls-files | grep -E '(^|/)\.env$|\.env\.original|credential|secret|token|\.pem$|\.key$' | grep -v '\.env\.example' || true)
+  # Match files that would CARRY a secret, not tooling that manages one:
+  # scripts/set-secret.sh is a helper, not a credential. Key material is also
+  # matched by shape, after a private key once reached this repo under the
+  # filename `eval "$(ssh-agent -s)"` — no keyword in it at all.
+  leaked=$(git ls-files -z | while IFS= read -r -d '' f; do
+      case "$f" in
+        .env|*/.env|*.env.original) echo "$f" ;;
+        *.pem|*.key|*.p12|*.ppk|id_rsa|id_ed25519|*/id_rsa|*/id_ed25519) echo "$f" ;;
+        *credential*.json|*secret*.json|*token*.json|*oauth*.json) echo "$f" ;;
+        *.sh|*.md|*.example) : ;;
+        *) head -c 40 "$f" 2>/dev/null | grep -qE 'BEGIN (OPENSSH|RSA|EC|PGP) PRIVATE KEY' && echo "$f" ;;
+      esac
+    done || true)
   [[ -z "$leaked" ]] && ok "no secret files tracked" || { bad "tracked secret files:"; echo "$leaked" | sed 's/^/         /'; }
   git ls-files --error-unmatch .hermes >/dev/null 2>&1 && bad ".hermes/ is tracked" || ok ".hermes/ not tracked"
 else

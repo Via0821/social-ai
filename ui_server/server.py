@@ -115,9 +115,28 @@ def _auth_required() -> bool:
     return bool(_password())
 
 
+# Fetched by the OS, not the page, and therefore WITHOUT the session cookie:
+# iOS asks for apple-touch-icon and the manifest's icons on its own when the
+# site is added to the home screen. Behind auth they answered 303 to the login
+# HTML, which iOS cannot read as an image — so it fell back to generating a
+# letter tile, and the owner got a black square with "S" instead of the mark.
+#
+# These are fixed branding files and the service worker. They carry nothing
+# private. User content stays behind auth: /api/file/* is deliberately absent.
+PUBLIC_PATHS = frozenset({
+    "/login",
+    "/manifest.webmanifest",
+    "/sw.js",
+    "/icon-192.png",
+    "/icon-512.png",
+    "/icon-maskable-512.png",
+    "/apple-touch-icon.png",
+})
+
+
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
-    if not _auth_required() or request.url.path in {"/login", "/manifest.webmanifest"}:
+    if not _auth_required() or request.url.path in PUBLIC_PATHS:
         return await call_next(request)
 
     if _token_valid(request.cookies.get(COOKIE_NAME, "")):
@@ -346,6 +365,197 @@ async def stop_chat(request: Request) -> JSONResponse:
     if proc.returncode is None:
         proc.kill()
     return JSONResponse({"stopped": True})
+
+
+# --------------------------------------------------------------------------
+# Voice fast path (TALK)
+#
+# Measured: a spoken turn cost ~10.4s end to end, and 6.2s of that was one
+# `hermes -z` invocation — of which only ~1.6s was the model. The rest was
+# Hermes starting up from scratch on every single turn.
+#
+# So TALK talks to OpenAI directly, with SOCIAL's persona and memory injected
+# as context. Anything actually needing Hermes — a web search, a stock quote,
+# a spreadsheet, or writing something to memory — is escalated back to the
+# normal path, so no capability is lost, only the startup cost.
+# --------------------------------------------------------------------------
+
+SOUL_FILE = HERMES_HOME / "SOUL.md"
+TALK_MODEL = os.environ.get("SOCIAL_TALK_MODEL", "gpt-5.2")
+TALK_HISTORY_TURNS = 12
+
+# Rolling context for the spoken conversation. Kept in memory: it is the
+# short-term thread, while anything worth keeping goes to Hermes' memory.
+_talk_history: list[dict[str, str]] = []
+
+_persona_cache: dict[str, object] = {"key": None, "text": ""}
+
+
+def _persona() -> str:
+    """SOUL.md plus curated memory, rebuilt only when a file changes."""
+    files = [SOUL_FILE, *(path for path, _ in MEMORY_STORES.values())]
+    key = tuple(f.stat().st_mtime_ns if f.exists() else 0 for f in files)
+    if _persona_cache["key"] == key:
+        return str(_persona_cache["text"])
+
+    parts = []
+    if SOUL_FILE.exists():
+        parts.append(SOUL_FILE.read_text(encoding="utf-8").strip())
+
+    for store, (path, label) in MEMORY_STORES.items():
+        entries = _read_entries(path)
+        if entries:
+            parts.append(f"## {label}（記憶）\n" + "\n".join(f"- {e}" for e in entries))
+
+    parts.append(
+        "## いま音声で話しています（最重要）\n"
+        "- 相手はスマホを持って目の前で待っている。**1〜2文で答える。**\n"
+        "- 記号・箇条書き・URLは読み上げに向かない。話し言葉で答える。\n"
+        "- 挨拶・雑談・言い換え・記憶の確認は、そのまま即答する。\n"
+        "- 検索・株価・スプレッドシート・ファイル、または記憶への保存が必要なときは、"
+        "答えを作らず escalate 関数を呼ぶこと。"
+    )
+    text = "\n\n".join(parts)
+    _persona_cache.update({"key": key, "text": text})
+    return text
+
+
+ESCALATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "escalate",
+        "description": (
+            "Web検索・株価・スプレッドシート・ファイル操作・記憶への保存など、"
+            "自分だけでは答えられない依頼を、道具を持つ本体に引き継ぐ。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "何が必要か（短く）"},
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
+# Split on Japanese and Latin sentence enders. Speaking can begin as soon as
+# the first one lands instead of waiting for the whole answer.
+_SENTENCE_END = re.compile(r"(?<=[。．！？!?\n])")
+
+
+@app.post("/api/talk")
+async def talk(request: Request) -> StreamingResponse:
+    body = await request.json()
+    said = (body.get("message") or "").strip()
+    if not said:
+        raise HTTPException(400, "message is required")
+    run_id = (body.get("run_id") or "").strip() or None
+    return StreamingResponse(
+        _talk_turn(said, run_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _talk_turn(said: str, run_id: str | None) -> AsyncIterator[bytes]:
+    import httpx
+
+    started = time.monotonic()
+    yield _sse("start", {})
+
+    messages = [{"role": "system", "content": _persona()},
+                *_talk_history[-TALK_HISTORY_TURNS:],
+                {"role": "user", "content": said}]
+
+    spoken = ""
+    pending = ""
+    escalating = False
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream(
+                "POST", "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {_openai_key()}"},
+                json={"model": TALK_MODEL, "messages": messages,
+                      "tools": [ESCALATE_TOOL], "stream": True},
+            ) as response:
+                if response.status_code != 200:
+                    await response.aread()
+                    raise RuntimeError(f"chat failed: {response.status_code}")
+
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(payload)["choices"][0]["delta"]
+                    except Exception:
+                        continue
+
+                    if delta.get("tool_calls"):
+                        escalating = True
+                        break
+
+                    piece = delta.get("content") or ""
+                    if not piece:
+                        continue
+                    spoken += piece
+                    pending += piece
+
+                    # Emit complete sentences as they form, so the client can
+                    # start speaking the first one while the rest is written.
+                    parts = _SENTENCE_END.split(pending)
+                    if len(parts) > 1:
+                        for sentence in parts[:-1]:
+                            if sentence.strip():
+                                yield _sse("sentence", {"text": sentence.strip()})
+                        pending = parts[-1]
+
+        if escalating:
+            # Hand the whole turn to Hermes, which owns the tools and memory.
+            yield _sse("escalating", {})
+            async for frame in _run_turn(said, run_id):
+                if frame.startswith(b"event: message\n"):
+                    try:
+                        text = json.loads(frame.split(b"data: ", 1)[1].decode())
+                        answer = (text.get("text") or "").strip()
+                    except Exception:
+                        answer = ""
+                    if answer:
+                        _remember_turn(said, answer)
+                        for sentence in filter(None,
+                                               (s.strip() for s in _SENTENCE_END.split(answer))):
+                            yield _sse("sentence", {"text": sentence})
+                        yield _sse("message", {"text": answer,
+                                               "attachments": text.get("attachments", [])})
+                elif frame.startswith(b"event: error\n"):
+                    yield frame
+            yield _sse("done", {"elapsed": round(time.monotonic() - started, 1),
+                                "escalated": True})
+            return
+
+        if pending.strip():
+            yield _sse("sentence", {"text": pending.strip()})
+
+        answer = spoken.strip()
+        if answer:
+            _remember_turn(said, answer)
+        yield _sse("message", {"text": answer, "attachments": []})
+
+    except Exception as exc:  # noqa: BLE001
+        log.exception("talk turn failed")
+        yield _sse("error", {"message": _sanitize(str(exc)) or "応答できませんでした。"})
+
+    yield _sse("done", {"elapsed": round(time.monotonic() - started, 1),
+                        "escalated": False})
+
+
+def _remember_turn(said: str, answer: str) -> None:
+    _talk_history.extend([{"role": "user", "content": said},
+                          {"role": "assistant", "content": answer}])
+    del _talk_history[: max(0, len(_talk_history) - TALK_HISTORY_TURNS * 2)]
 
 
 # --------------------------------------------------------------------------

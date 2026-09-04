@@ -139,6 +139,62 @@ Verified: unauthenticated page → 303 to `/login`; unauthenticated API → 401;
 wrong passphrase → 401 after a 1s delay; correct → cookie set, 30-day expiry;
 tampered cookie → 401.
 
+## The conversation lives outside React
+
+Each screen used to hold the transcript in its own `useState`. Send a message,
+switch tabs before the answer lands, and the screen unmounts — so when the
+reply finally arrived, `setState` hit a dead component. The answer was
+**discarded and never persisted**. The owner reported it as "history is not
+reflected immediately"; the reply had genuinely been thrown away.
+
+`lib/chatStore.ts` holds the messages and the in-flight run at module scope,
+so a turn completes and saves regardless of what is mounted. Screens
+subscribe through `useSyncExternalStore` (`lib/useChat.ts`) and no longer own
+the data — CHAT, TALK and HISTORY all read the same array, so a reply arriving
+while HISTORY is open appears there without navigating away and back.
+
+`send()` is deliberately **not awaited** by the caller, for the same reason.
+
+Verified by stubbing `localStorage` and `fetch` and running a turn with **zero
+subscribers** — the state a fully unmounted UI is in. The reply still lands in
+storage.
+
+### Day grouping
+
+HISTORY groups by the **viewer's local calendar date**, boundary at local
+midnight — so a phone in Japan splits days at JST midnight regardless of the
+server's timezone. Entries carry `at` (epoch ms), set when appended.
+
+**Messages saved before timestamping must not be dated as "now".** The first
+version wrote `new Date(m.at ?? Date.now())`, which stamped undated messages
+at *render* time — so every old conversation collapsed into today and the
+grouping looked broken. Their real time is gone and cannot be recovered, so
+`isUndated()` routes them to a separate 以前の会話 bucket, sorted last. Dated
+messages also show a time, so ordering within a day is visible.
+
+Threads were considered and deferred: the owner asked for per-day as the
+acceptable minimum, and Hermes' own session grouping does not line up with
+what the UI shows.
+
+## Safari will not play a reply unless the element was unlocked by a tap
+
+TALK transcribed the owner correctly and answered in text, but stayed silent.
+Not a TTS fault — the audio was generated fine. Browsers only allow `play()`
+inside a user gesture, and in TALK every reply plays from deep inside an async
+chain (record → transcribe → ask → speak), by which point the gesture context
+from the initial tap is long gone. Safari refuses, and the rejection is easy
+to swallow.
+
+`lib/audioOut.ts` keeps **one** `Audio` element, unlocked synchronously inside
+the tap handler in `begin()` — before any `await` — by playing 50 ms of
+silence. An element unlocked by a gesture stays unlocked, so every later reply
+reuses it.
+
+Playback failure now reports which kind it was: `NotAllowedError` is the
+autoplay block specifically and tells the owner to tap again, anything else is
+a genuine playback failure. Either way the mic reopens, so a silent reply
+never strands the conversation.
+
 ## Files SOCIAL produces
 
 A reply may name a file on the server — Hermes' `MEDIA:<path>` tag, or a bare
@@ -215,6 +271,44 @@ Listening and speaking also scale with measured amplitude, so it tracks the
 owner's actual voice rather than looping. `prefers-reduced-motion` disables
 all of it.
 
+### The voice fast path (B案, 2026-09-03)
+
+A spoken turn took ~10.5s. Profiling put 6.2s of that in one `hermes -z`
+invocation — but only **1.6s of it was the model**. The rest was Hermes
+starting from scratch on every single turn.
+
+`/api/talk` therefore calls OpenAI directly for TALK, with SOCIAL's persona
+and curated memory injected as the system prompt, and **escalates back to
+Hermes whenever the turn actually needs it** — a web search, a stock quote, a
+spreadsheet, a file, or a memory write. The model decides via a single
+`escalate` tool, so nothing was traded away; only the startup cost.
+
+| Stage | Before | After |
+|---|---|---|
+| End-of-speech detection | 1400 ms | 800 ms |
+| Speech → text | 1205 ms | 1205 ms |
+| SOCIAL's response | 6246 ms | **1600 ms** |
+| Time to first spoken word | 1631 ms | **600 ms** |
+| **Total** | **10.5 s** | **4.2 s** |
+
+Measured after the change: conversational turns reach a first sentence in
+1.1–3.0 s; a stock question escalated correctly and returned live data.
+
+Two details that make this safe rather than merely fast:
+
+- **The persona cache keys on file mtimes.** Saving a memory escalates to
+  Hermes, which writes the file; the very next fast-path turn sees the new
+  entry. Verified — a fact stored in one turn was recalled 1.15 s later in
+  the next.
+- **Sentences are emitted as the model writes them** (`_SENTENCE_END`), and
+  `lib/ttsQueue.ts` synthesises them with a small look-ahead while playing
+  strictly in order. Speaking starts on sentence one instead of after the
+  whole answer.
+
+Escalated turns are still slow by nature — a stock lookup took 37 s — but
+they are correct, and the owner hears the answer sentence by sentence rather
+than in silence.
+
 ### Continuous conversation
 
 `lib/voiceLoop.ts` runs listen → detect end of speech → send → speak →
@@ -288,6 +382,31 @@ padded with the artwork's own background:
 
 The header mark reuses `icon-192.png`, so the app and its home-screen icon
 are visibly the same thing.
+
+### Icons must be reachable without the session cookie
+
+The home-screen icon came out as a black tile with a white "S" — an icon
+nobody had designed. iOS was generating a letter fallback because it could
+not load ours.
+
+Cause: `apple-touch-icon` and the manifest's icons are fetched **by the OS,
+not the page**, and therefore without the session cookie. The auth middleware
+answered `303` to the login HTML, iOS could not read that as an image, and
+fell back to a generated tile. The manifest itself was exempt; the icons it
+pointed at were not.
+
+`PUBLIC_PATHS` in `ui_server/server.py` now exempts the fixed branding files
+and the service worker. They contain nothing private. **`/api/file/*` is
+deliberately not in that set** — user content stays behind the passphrase.
+Verified after the change: icons and `sw.js` return 200 uncredentialed, while
+`/api/file/*`, `/api/memory` and `/` still refuse.
+
+iOS wants `180x180` specifically, so `apple-touch-icon.png` is shipped at
+that size alongside the 192/512 pair.
+
+**iOS caches the icon at the moment the site is added to the home screen.**
+Fixing the server does not update an icon already on someone's phone — the
+shortcut has to be deleted and re-added.
 
 **Bump `SHELL_CACHE` in `sw.js` whenever an icon changes** — it is cached by
 the service worker, and a stale cache keeps serving the old one after an
