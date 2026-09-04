@@ -131,6 +131,10 @@ PUBLIC_PATHS = frozenset({
     "/icon-512.png",
     "/icon-maskable-512.png",
     "/apple-touch-icon.png",
+    # Google requires a reachable home page and privacy policy before an
+    # OAuth app can be published, and fetches them without any session.
+    "/privacy",
+    "/privacy.html",
 })
 
 
@@ -1147,6 +1151,10 @@ async def status() -> JSONResponse:
 
 if UI_DIST.exists():
     app.mount("/assets", StaticFiles(directory=UI_DIST / "assets"), name="assets")
+
+    @app.get("/privacy")
+    async def privacy() -> FileResponse:
+        return FileResponse(UI_DIST / "privacy.html", media_type="text/html")
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str) -> FileResponse:

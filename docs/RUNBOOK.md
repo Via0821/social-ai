@@ -179,10 +179,78 @@ journalctl --user -u hermes-gateway -n 80 --no-pager | grep -iE "error|fail"
 
 ---
 
-## 10. 本番サーバーへの移行
+## 10. Google連携（スプレッドシート）
 
-まだ実施していません。手順は [MIGRATION.md](MIGRATION.md) にあります。
+**2026-09-04 に「本番」へ公開済みです。** 認証は失効しません。
 
 ```bash
-./scripts/migration-check.sh   # 移行可能な状態かを検査
+# 認証が生きているか
+sudo -u social -H bash -lc 'cd ~/Social-ai && \
+  HERMES_HOME=$HOME/Social-ai/.hermes \
+  $HOME/.hermes/hermes-agent/venv/bin/python \
+  .hermes/skills/productivity/google-workspace/scripts/setup.py --check-live'
 ```
+
+`invalid_grant` が出たら再認証が必要です（`--auth-url` でURLを発行 →
+ブラウザで承認 → 戻り先URL全体を `setup.py "<URL>"` に渡す）。
+
+> **公開ステータスを「テスト中」に戻さないでください。**
+> テスト中のアプリは、Googleが認証を **7日で強制失効**させます。
+> 実際にこれで一度スプレッドシートが読めなくなりました。
+
+権限は `spreadsheets.readonly` のみです。**書き込みはできません。**
+読ませたいシートは `.hermes/SOUL.md` の「登録済みスプレッドシート」表に
+ID を追記してください（Drive検索の権限は渡していないため、
+登録していないシートは名前で探せません）。
+
+---
+
+## 11. 本番サーバー（ConoHa）
+
+**移行は完了しています。**（2026-09-03）
+本番はクライアント所有の ConoHa VPS で、`social` ユーザーが動かしています。
+
+| 項目 | 値 |
+|---|---|
+| ホスト | `163.44.96.144` |
+| 実行ユーザー | `social`（`root` ではありません） |
+| プロジェクト | `/home/social/Social-ai` |
+
+```bash
+# 本番での操作は必ず social ユーザーで
+sudo -u social -H bash -lc 'cd ~/Social-ai && ./scripts/health-check.sh'
+```
+
+> **`sudo -u social` に `-H` を必ず付けてください。**
+> 付け忘れると `$HOME` が root のままになり、`HERMES_HOME` が
+> 別の場所を指して「記憶がない」状態に見えます。
+
+`systemctl --user` を root 経由で使うときは実行先を明示します。
+
+```bash
+sudo -u social -H XDG_RUNTIME_DIR=/run/user/$(id -u social) \
+  systemctl --user status hermes-gateway social-ui social-tunnel --no-pager
+```
+
+`social` は **linger 有効**なので、ログアウト中もサービスは動き続け、
+サーバー再起動後も自動で復帰します。
+
+### 更新の流れ
+
+```bash
+# 手元で編集 → 本番へ反映
+rsync -av --exclude .git --exclude node_modules --exclude .env \
+  ~/Social-ai/ social@163.44.96.144:~/Social-ai/
+
+sudo -u social -H bash -lc 'cd ~/Social-ai/ui && npm run build'
+sudo -u social -H XDG_RUNTIME_DIR=/run/user/$(id -u social) \
+  systemctl --user restart social-ui
+```
+
+> **`.env` は同期しないでください。** 本番の値が上書きされます。
+> 秘密情報の変更は本番側で `./scripts/set-secret.sh` を使います。
+
+### 開発VPSについて
+
+移行時に、開発VPS側のサービスは**停止のうえ無効化済み**です。
+再度有効にすると、**デイリーブリーフがLINEに二重配信**されます。
