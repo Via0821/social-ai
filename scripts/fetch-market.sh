@@ -17,11 +17,33 @@
 # inventing numbers.
 set -uo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export HERMES_HOME="$PROJECT_ROOT/.hermes"
+# Runs from two places: scripts/ during development, and .hermes/scripts/
+# when attached to the cron job with --script. Deriving HERMES_HOME from the
+# script's own location therefore lands one level off in one of the two, so
+# locate the skill by searching instead of assuming.
+_find_stocks() {
+  local base
+  for base in "${HERMES_HOME:-}" \
+              "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.hermes" \
+              "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.hermes" \
+              "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" \
+              "$HOME/Social-ai/.hermes"; do
+    [[ -n "$base" ]] || continue
+    if [[ -f "$base/skills/finance/stocks/scripts/stocks_client.py" ]]; then
+      echo "$base"
+      return 0
+    fi
+  done
+  return 1
+}
+
+HERMES_HOME="$(_find_stocks)" || {
+  echo "stocks skill not found (searched HERMES_HOME and script-relative paths)" >&2
+  exit 1
+}
+export HERMES_HOME
 
 SCRIPT="$HERMES_HOME/skills/finance/stocks/scripts/stocks_client.py"
-[[ -f "$SCRIPT" ]] || { echo "stocks skill not installed" >&2; exit 1; }
 
 PY="$(dirname "$(readlink -f "$(command -v hermes)")")/python3"
 [[ -x "$PY" ]] || PY="$(command -v python3)"

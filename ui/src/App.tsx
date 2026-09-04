@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Chat from "./screens/Chat";
-import Talk from "./screens/Talk";
+import Talk, { toggleTalk } from "./screens/Talk";
 import Menu, { type MenuTarget } from "./screens/Menu";
 import History from "./screens/History";
 import Memory from "./screens/Memory";
@@ -127,7 +127,12 @@ function BottomNav({ route, onGo }: { route: Route; onGo: (r: Route) => void }) 
         />
 
         <button
-          onClick={() => onGo("talk")}
+          onClick={() => {
+            // Already on TALK: the button becomes start/stop rather than a
+            // no-op navigation. Elsewhere it navigates as before.
+            if (route === "talk" && toggleTalk()) return;
+            onGo("talk");
+          }}
           aria-label="TALK"
           aria-current={route === "talk" ? "page" : undefined}
           className="relative -mt-7 flex flex-col items-center"

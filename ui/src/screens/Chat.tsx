@@ -5,7 +5,7 @@ import * as chat from "../lib/chatStore";
 import { useChat } from "../lib/useChat";
 
 export default function Chat() {
-  const { messages, busy, elapsed } = useChat();
+  const { messages, busy, elapsed, streaming } = useChat();
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Attachment | null>(null);
@@ -105,7 +105,16 @@ export default function Chat() {
             <Bubble key={i} msg={m} onSpeak={() => playAloud(m.text)} />
           ))}
 
-          {busy && (
+          {/* The reply as it is being written. Once the turn ends it moves
+              into `messages`, so this and the bubble never both show it. */}
+          {streaming && (
+            <div className="card self-start max-w-[85%] whitespace-pre-wrap break-words px-5 py-3">
+              {streaming}
+              <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse align-middle bg-sky-400" />
+            </div>
+          )}
+
+          {busy && !streaming && (
             <div className="card self-start px-5 py-3" style={{ color: "var(--text-dim)" }}>
               <span className="inline-flex items-center gap-2">
                 <Dots />

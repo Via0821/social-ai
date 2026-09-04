@@ -15,6 +15,14 @@ const LABEL: Record<OrbState, string> = {
   speaking: "お答えしています",
 };
 
+/** Lets the bottom TALK button drive the same start/stop the orb does. */
+let externalToggle: (() => void) | null = null;
+export function toggleTalk(): boolean {
+  if (!externalToggle) return false;
+  externalToggle();
+  return true;
+}
+
 export default function Talk() {
   const [state, setState] = useState<OrbState>("idle");
   const [level, setLevel] = useState(0);
@@ -129,6 +137,13 @@ export default function Talk() {
     setState("listening");
     await loopRef.current?.resume();
   }
+
+  // Registered while this screen is mounted, so tapping TALK in the nav bar
+  // starts and stops the conversation exactly like tapping the orb.
+  useEffect(() => {
+    externalToggle = () => (state === "idle" ? void begin() : end());
+    return () => { externalToggle = null; };
+  });
 
   const live = state !== "idle";
 

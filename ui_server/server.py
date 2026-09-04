@@ -503,6 +503,10 @@ async def _talk_turn(said: str, run_id: str | None) -> AsyncIterator[bytes]:
                         continue
                     spoken += piece
                     pending += piece
+                    # Raw fragments as well as sentences: the chat screen
+                    # renders these as they land, so text appears the way it
+                    # does in ChatGPT instead of after a silent wait.
+                    yield _sse("delta", {"text": piece})
 
                     # Emit complete sentences as they form, so the client can
                     # start speaking the first one while the rest is written.
@@ -525,6 +529,12 @@ async def _talk_turn(said: str, run_id: str | None) -> AsyncIterator[bytes]:
                         answer = ""
                     if answer:
                         _remember_turn(said, answer)
+                        # Escalated turns arrive whole, so replay them in
+                        # chunks — the reader still sees text appear rather
+                        # than a long pause then a wall of it.
+                        for chunk in _SENTENCE_END.split(answer):
+                            if chunk:
+                                yield _sse("delta", {"text": chunk})
                         for sentence in filter(None,
                                                (s.strip() for s in _SENTENCE_END.split(answer))):
                             yield _sse("sentence", {"text": sentence})
@@ -939,17 +949,74 @@ async def transcribe(file: UploadFile = File(...)) -> JSONResponse:
     return JSONResponse({"text": r.json().get("text", "")})
 
 
+# Voices the owner can pick from. Labelled by how they actually sound in
+# Japanese rather than by OpenAI's internal names, which mean nothing here.
+VOICES = [
+    {"id": "alloy",   "label": "標準",         "note": "落ち着いた中性的な声"},
+    {"id": "echo",    "label": "男性",         "note": "低めで落ち着いた声"},
+    {"id": "onyx",    "label": "男性（低め）", "note": "さらに低く重みのある声"},
+    {"id": "nova",    "label": "女性",         "note": "明るくはっきりした声"},
+    {"id": "shimmer", "label": "女性（柔らか）", "note": "やわらかく穏やかな声"},
+    {"id": "fable",   "label": "語り",         "note": "抑揚のある語り口"},
+]
+_VOICE_IDS = {v["id"] for v in VOICES}
+VOICE_SETTINGS_FILE = HERMES_HOME / "voice_settings.json"
+
+
+def _voice_settings() -> dict:
+    try:
+        data = json.loads(VOICE_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    voice = data.get("voice")
+    speed = data.get("speed")
+    return {
+        "voice": voice if voice in _VOICE_IDS else "alloy",
+        # OpenAI accepts 0.25–4.0; clamp to a range that stays intelligible.
+        "speed": min(max(float(speed), 0.6), 1.6) if isinstance(speed, (int, float)) else 1.0,
+    }
+
+
+@app.get("/api/voice/settings")
+async def get_voice_settings() -> JSONResponse:
+    return JSONResponse({"voices": VOICES, **_voice_settings()})
+
+
+@app.put("/api/voice/settings")
+async def put_voice_settings(request: Request) -> JSONResponse:
+    body = await request.json()
+    current = _voice_settings()
+    voice = body.get("voice", current["voice"])
+    speed = body.get("speed", current["speed"])
+    if voice not in _VOICE_IDS:
+        raise HTTPException(400, "unknown voice")
+    try:
+        speed = min(max(float(speed), 0.6), 1.6)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "speed must be a number")
+
+    VOICE_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    VOICE_SETTINGS_FILE.write_text(
+        json.dumps({"voice": voice, "speed": speed}), encoding="utf-8"
+    )
+    return JSONResponse({"voices": VOICES, "voice": voice, "speed": speed})
+
+
 @app.post("/api/voice/speak")
 async def speak(request: Request) -> Response:
     import httpx
-    text = ((await request.json()).get("text") or "").strip()
+    body = await request.json()
+    text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text is required")
+    settings = _voice_settings()
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
             "https://api.openai.com/v1/audio/speech",
             headers={"Authorization": f"Bearer {_openai_key()}"},
-            json={"model": "gpt-4o-mini-tts", "voice": "alloy",
+            json={"model": "gpt-4o-mini-tts",
+                  "voice": settings["voice"],
+                  "speed": settings["speed"],
                   "input": text[:4000], "response_format": "mp3"},
         )
     if r.status_code != 200:

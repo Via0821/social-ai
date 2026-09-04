@@ -19,6 +19,10 @@ type Listener = () => void;
 
 let messages: Msg[] = loadHistory();
 let busy = false;
+// The reply being written right now. Rendered live, then folded into the
+// transcript when the turn ends — so the reader watches it appear instead of
+// staring at "考えています…".
+let streaming = "";
 let elapsed = 0;
 let runId = "";
 const listeners = new Set<Listener>();
@@ -43,6 +47,7 @@ export function subscribe(fn: Listener): () => void {
 export const getMessages = (): Msg[] => messages;
 export const isBusy = (): boolean => busy;
 export const getElapsed = (): number => elapsed;
+export const getStreaming = (): string => streaming;
 
 export function append(msg: Msg): void {
   commit([...messages, { ...msg, at: msg.at ?? Date.now() }]);
@@ -98,14 +103,18 @@ export async function send(text: string, opts: SendOptions = {}): Promise<void> 
     }
 
     runId = crypto.randomUUID();
-    await api.sendMessage(opts.outgoing ?? trimmed, {
-      onProgress: (s) => { elapsed = s; emit(); },
-      onMessage: (t: string, files?: ReplyFile[]) =>
-        append({ role: "social", text: t, files }),
-      onError: (m: string) => append({ role: "social", text: m, error: true }),
+    streaming = "";
+    await api.talk(opts.outgoing ?? trimmed, {
+      onDelta: (piece) => { streaming += piece; emit(); },
+      onMessage: (t: string, files?: ReplyFile[]) => {
+        streaming = "";
+        if (t || files?.length) append({ role: "social", text: t, files });
+      },
+      onError: (m: string) => { streaming = ""; append({ role: "social", text: m, error: true }); },
     }, runId);
   } finally {
     busy = false;
+    streaming = "";
     runId = "";
     emit();
   }
